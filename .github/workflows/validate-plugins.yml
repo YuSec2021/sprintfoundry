@@ -1,0 +1,135 @@
+name: Validate Plugins
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/**'
+      - '.claude-plugin/marketplace.json'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'plugins/**'
+      - '.claude-plugin/marketplace.json'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate plugin structure
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate marketplace.json
+        run: |
+          python3 - << 'PY'
+          import json, re, pathlib, sys
+
+          mj = pathlib.Path(".claude-plugin/marketplace.json")
+          if not mj.exists():
+              print("ERROR: .claude-plugin/marketplace.json missing"); sys.exit(1)
+
+          data = json.loads(mj.read_text())
+          errors = []
+
+          if "name" not in data:
+              errors.append("marketplace.json: missing 'name'")
+          if "plugins" not in data:
+              errors.append("marketplace.json: missing 'plugins' array")
+
+          for p in data.get("plugins", []):
+              name = p.get("name", "")
+              if not re.match(r'^[a-z0-9-]+$', name):
+                  errors.append(f"plugin name '{name}' must be kebab-case")
+              src = p.get("source", "")
+              if src.startswith("./"):
+                  plugin_dir = pathlib.Path(src)
+                  if not plugin_dir.exists():
+                      errors.append(f"plugin source '{src}' does not exist")
+
+          if errors:
+              for e in errors: print("ERROR:", e)
+              sys.exit(1)
+
+          print("marketplace.json: OK")
+          print(f"  Plugins: {[p['name'] for p in data.get('plugins', [])]}")
+          PY
+
+      - name: Validate each plugin structure
+        run: |
+          python3 - << 'PY'
+          import json, re, pathlib, sys
+
+          mj = json.loads(pathlib.Path(".claude-plugin/marketplace.json").read_text())
+          errors = []
+
+          for entry in mj.get("plugins", []):
+              src  = entry.get("source", "")
+              name = entry.get("name", "")
+              if not src.startswith("./"): continue
+
+              plugin = pathlib.Path(src)
+              pj = plugin / ".claude-plugin" / "plugin.json"
+
+              # plugin.json
+              if not pj.exists():
+                  errors.append(f"{name}: .claude-plugin/plugin.json missing")
+                  continue
+              pdata = json.loads(pj.read_text())
+              if not pdata.get("name"):
+                  errors.append(f"{name}: plugin.json missing 'name'")
+
+              # skills
+              skills_dir = plugin / "skills"
+              if skills_dir.exists():
+                  for skill in skills_dir.iterdir():
+                      if skill.is_dir() and not (skill / "SKILL.md").exists():
+                          errors.append(f"{name}: skills/{skill.name}/SKILL.md missing")
+              else:
+                  errors.append(f"{name}: skills/ directory missing")
+
+              # agents
+              agents_dir = plugin / "agents"
+              if agents_dir.exists():
+                  mds = list(agents_dir.glob("*.md"))
+                  if not mds:
+                      errors.append(f"{name}: agents/ has no .md files")
+              
+              print(f"{name}: structure OK")
+
+          if errors:
+              for e in errors: print("ERROR:", e)
+              sys.exit(1)
+          PY
+
+      - name: Check version consistency
+        run: |
+          python3 - << 'PY'
+          import json, pathlib, sys
+
+          mj = json.loads(pathlib.Path(".claude-plugin/marketplace.json").read_text())
+          errors = []
+
+          for entry in mj.get("plugins", []):
+              src = entry.get("source", "")
+              if not src.startswith("./"): continue
+              plugin = pathlib.Path(src)
+              pj = plugin / ".claude-plugin" / "plugin.json"
+              if not pj.exists(): continue
+
+              market_ver  = entry.get("version", "")
+              plugin_ver  = json.loads(pj.read_text()).get("version", "")
+              market_name = entry.get("name", src)
+
+              if market_ver != plugin_ver:
+                  errors.append(
+                      f"{market_name}: marketplace.json version={market_ver} "
+                      f"but plugin.json version={plugin_ver}"
+                  )
+              else:
+                  print(f"{market_name} v{plugin_ver}: version consistent")
+
+          if errors:
+              for e in errors: print("ERROR:", e)
+              sys.exit(1)
+          PY

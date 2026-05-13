@@ -1,1 +1,44 @@
+# ── Runtime state files (generated at runtime, not committed) ──────────────────
+run-state.json
+run-events.ndjson
+orchestrator-log.ndjson
+harness-audit.ndjson
+eval-trigger.txt
+sprint-contract.md
+sprint-fence.json
+claude-progress.txt
+eval-result-*.md
+quality-gate-*.md
+contract-tampered.flag
+CHANGELOG.md
+VERSION
+
+# ── Project-under-test output (created by init.sh) ───────────────────────────
+node_modules/
+__pycache__/
+.pytest_cache/
+dist/
+build/
+*.pyc
+
+# ── Legacy example files at root (moved to examples/) ────────────────────────
+# These are kept tracked for backward-compat but prefer examples/ directory
+*.example.json
+*.example.ndjson
+*.example.md
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
 .DS_Store
+*.swp
+.env
+
+# Build artifacts / temp dirs
+plugins/plugins_tmp/
+.claude/worktrees/
+
+# ── Binary build artifacts (released via GitHub Releases, not committed) ──────
+*.plugin
+*.skill
+
+# ── Runtime log files already tracked — run these to untrack: ────────────────
+# git rm --cached run-state.json run-events.ndjson orchestrator-log.ndjson harness-audit.ndjson

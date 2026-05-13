@@ -1,0 +1,32 @@
+{
+  "product": "My App",
+  "description": "One-paragraph description of what this product does.",
+  "tech_stack": {
+    "frontend": "react",
+    "backend": "fastapi"
+  },
+  "verification": {
+    "mode": "browser",
+    "base_url": "http://localhost:3000"
+  },
+  "design_language": {
+    "style": "clean",
+    "primary_color": "#3b82f6"
+  },
+  "features": [
+    "User authentication",
+    "Dashboard"
+  ],
+  "sprints": [
+    {
+      "id": 1,
+      "title": "Auth — login / register",
+      "features": ["User authentication"]
+    },
+    {
+      "id": 2,
+      "title": "Dashboard",
+      "features": ["Dashboard"]
+    }
+  ]
+}

@@ -2,18 +2,75 @@
 
 Compact Claude Code guide for SprintFoundry. Keep this file small; detailed
 protocol notes live in `docs/protocol.md`, and role-specific prompts live in
-`.claude/agents/`.
+`plugin/agents/` (canonical) or `.claude/agents/` (local dev fallback).
+
+## Repository Layout
+
+```
+autonomous-sprint-harness/
+├── plugin/                        # Distributable plugin source (source of truth)
+│   ├── .claude-plugin/
+│   │   └── plugin.json           # Plugin manifest
+│   ├── skills/
+│   │   ├── sprintfoundry-orchestrator/  # Entry-point skill (routes, coordinates)
+│   │   │   ├── SKILL.md
+│   │   │   └── references/       # 6 reference docs loaded on demand
+│   │   ├── harness-branching/    # Git branch lifecycle skill
+│   │   └── harness-observability/ # Audit log skill
+│   └── agents/                   # Sub-agents called by the orchestrator skill
+│       ├── planner.md
+│       ├── evaluator.md
+│       └── generator.md          # Reference only — Generator is Codex CLI
+├── .claude/
+│   ├── agents/                   # Local dev fallback agents
+│   │   ├── orchestrator.md       # DEPRECATED — superseded by plugin skill
+│   │   ├── planner.md
+│   │   ├── evaluator.md
+│   │   └── generator.md
+│   └── skills/                   # Local dev skills (harness-branching, observability)
+├── examples/                      # Example / template files for new projects
+│   ├── run-state.json
+│   ├── planner-spec.json
+│   ├── sprint-contract.md
+│   ├── eval-result-1.md
+│   ├── bug-report.md
+│   ├── change-request.md
+│   └── human-escalation.md
+├── scripts/
+│   ├── orchestrate.py            # Orchestrator helper / state inspector
+│   ├── harness-log.py            # Audit log writer
+│   ├── install-hooks.sh          # Git hook installer
+│   └── package_plugin.sh         # Build sprintfoundry.plugin from plugin/
+├── docs/protocol.md              # Full protocol reference
+├── AGENTS.md                     # Codex (Generator) contract
+└── sprintfoundry.plugin          # Built artifact — DO NOT EDIT DIRECTLY
+```
 
 ## Runtime Roles
 
 | Role | Runtime | Invocation |
 | --- | --- | --- |
-| Planner | Claude subagent | `Agent(subagent_type="planner", ...)` |
+| Orchestrator | **Plugin skill** `sprintfoundry-orchestrator` | Triggered by user |
+| Planner | Claude sub-agent | `Agent(subagent_type="planner", ...)` |
 | Generator | Codex CLI | `codex exec --full-auto ...` |
-| Evaluator | Claude subagent | `Agent(subagent_type="evaluator", ...)` |
-| Orchestrator | Claude main/subagent | routes by file state |
+| Evaluator | Claude sub-agent | `Agent(subagent_type="evaluator", ...)` |
 
-Generator is always Codex CLI. Never invoke a Claude `generator` subagent.
+Generator is always Codex CLI. Never invoke a Claude `generator` sub-agent.
+
+The Orchestrator is the **plugin skill** — not an agent. Users trigger it via the
+skill interface. It then delegates to planner/evaluator agents and Codex.
+
+## Plugin Development Workflow
+
+Edit source in `plugin/`, then rebuild:
+
+```bash
+bash scripts/package_plugin.sh              # builds sprintfoundry.plugin
+bash scripts/package_plugin.sh --bump minor # bumps minor version then builds
+```
+
+Keep `plugin/` and `.claude/agents/` in sync for planner/evaluator/generator.
+The orchestrator logic lives **only** in `plugin/skills/sprintfoundry-orchestrator/SKILL.md`.
 
 ## Startup Snapshot
 
@@ -40,19 +97,16 @@ branch, stop and resolve the branch mismatch before routing.
 
 Apply this order:
 
-1. `needs_human=true` -> pause.
-2. Missing `planner-spec.json` -> Planner creates spec, `init.sh`, progress log.
-3. Sprint-history audit inconsistent -> pause.
-4. `eval-trigger.txt` exists -> Evaluator CHECK or targeted Codex retry.
-5. `sprint-contract.md` exists but unapproved -> Evaluator contract review.
-6. Approved `sprint-contract.md` -> prepare branch/fence, invoke Codex implementation.
-7. `bug-report.md` -> Codex proposes bugfix contract.
-8. `change-request.md` -> route by `Type`.
-9. All planned sprints PASS -> complete.
-10. Otherwise -> Codex proposes the next sprint contract.
-
-The only authoritative completion signal is `eval-result-{N}.md` containing
-`SPRINT PASS`.
+1. `needs_human=true` → pause.
+2. Missing `planner-spec.json` → Planner creates spec, `init.sh`, progress log.
+3. Sprint-history audit inconsistent → pause.
+4. `eval-trigger.txt` exists → Quality Gate → Evaluator CHECK or targeted Codex retry.
+5. `sprint-contract.md` exists but unapproved → Evaluator contract review.
+6. Approved `sprint-contract.md` → prepare branch/fence, invoke Codex implementation.
+7. `bug-report.md` → Codex proposes bugfix contract.
+8. `change-request.md` → route by `Type`.
+9. All planned sprints PASS → complete.
+10. Otherwise → Codex proposes the next sprint contract.
 
 ## Verification Modes
 
@@ -68,21 +122,7 @@ Planner should include:
 }
 ```
 
-Evaluator CHECK uses:
-
-- `browser`: Playwright MCP.
-- `api`: HTTP requests and response assertions.
-- `cli`: shell commands, exit codes, stdout/stderr, generated files.
-- `job`: queue/job triggers, polling, side effects.
-- `library`: external consumer harness.
-
-Missing verification tools are environment failures: write SPRINT FAIL with a
-clear unavailable-tool reason and pause without consuming retry budget.
-
 ## Codex Commands
-
-Use the version-aware command emitted by `scripts/orchestrate.py` whenever
-possible. Modern Codex invocation:
 
 ```bash
 codex exec --full-auto \
@@ -91,58 +131,6 @@ codex exec --full-auto \
   --skip-git-repo-check \
   "<prompt>"
 ```
-
-Standard prompts:
-
-```text
-Read planner-spec.json. Propose sprint-contract.md for Sprint N.
-Follow AGENTS.md Generator rules. Stop after writing the file.
-```
-
-```text
-sprint-contract.md is approved. Implement Sprint N ONLY.
-After committing, write eval-trigger.txt containing exactly: sprint=N.
-STOP IMMEDIATELY after writing eval-trigger.txt. Follow AGENTS.md.
-```
-
-```text
-Sprint N failed. Fix ONLY the cited issues from the inlined Evaluator verdict.
-Re-commit and write eval-trigger.txt containing exactly: sprint=N.
-STOP after writing eval-trigger.txt. Follow AGENTS.md.
-```
-
-## Orchestrator Script
-
-Useful commands:
-
-```bash
-python3 scripts/orchestrate.py --project-dir . --json
-python3 scripts/orchestrate.py --project-dir . --check-only --json
-python3 scripts/harness-log.py verify
-python3 scripts/harness-log.py tail -n 30
-bash scripts/install-hooks.sh
-```
-
-`--check-only` must be side-effect free: no log writes, no state writes, no
-cleanup, no branch switching, no Codex execution.
-
-## Branching
-
-- One branch per sprint: `codex/sprint-<N>-<slug>`.
-- Implementation and retries stay on the sprint branch.
-- `main` should contain accepted progress only.
-- Merge only after Evaluator writes `SPRINT PASS`.
-
-## Progress Hygiene
-
-Keep `claude-progress.txt` compact:
-
-- latest project summary
-- latest three sprint entries
-- no stack traces, dumps, or long narratives
-
-Compress before routing if it exceeds 60 lines or contains more than three
-sprint entries.
 
 ## Hard Rules
 

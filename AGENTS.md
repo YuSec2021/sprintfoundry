@@ -7,13 +7,20 @@ short and operational. Full background lives in `docs/protocol.md`.
 
 | Agent | Runtime | Responsibility |
 | --- | --- | --- |
-| Planner | Claude Code | Writes `planner-spec.json`, `init.sh`, and initial `claude-progress.txt`. |
+| Orchestrator | **Plugin skill** `sprintfoundry-orchestrator` | Routes by file state; entry point for all user requests. |
+| Planner | Claude sub-agent | Writes `planner-spec.json`, `init.sh`, and initial `claude-progress.txt`. |
 | Generator | Codex CLI | Implements exactly one approved sprint, commits, writes `eval-trigger.txt`. |
-| Evaluator | Claude Code | Reviews contracts and runs independent black-box CHECK. |
-| Orchestrator | Claude Code | Routes by file state; never writes app code or self-evaluates. |
+| Evaluator | Claude sub-agent | Reviews contracts and runs independent black-box CHECK. |
+
+The Orchestrator is now a **skill** (not an agent) — the entry point that users trigger.
+Planner and Evaluator are sub-agents called by the Orchestrator skill via `Agent(subagent_type=...)`.
+Generator is always Codex CLI via Bash — never a Claude sub-agent.
 
 The gate rule: Generator never writes `SPRINT PASS` or `SPRINT FAIL`. Only the
 Evaluator writes `eval-result-{N}.md`.
+
+> **Plugin source**: `plugin/` directory. Build: `bash scripts/package_plugin.sh`
+> **Example files**: `examples/` directory (run-state, planner-spec, sprint-contract, etc.)
 
 ## State Files
 
