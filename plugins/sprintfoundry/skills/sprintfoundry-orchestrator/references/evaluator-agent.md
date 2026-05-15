@@ -61,7 +61,8 @@ bash init.sh
 `quality-gate-N.md` 是 Orchestrator 在调用你之前已经运行的静态分析结果。
 你不需要重新运行静态分析工具——读取结果文件即可，将其作为 Craft 评分的输入。
 
-`eval-trigger.txt` may be `sprint=N` or `sprint=N-retry`. Either way, write (or overwrite) `eval-result-N.md`.
+`eval-trigger.txt` may be `sprint=N` or `sprint=N-retry`. Either way, write
+or overwrite `.sprintfoundry/eval-results/eval-result-N.md`.
 
 If `bash init.sh` fails: write `SPRINT FAIL` with reason `Dev environment failed to start`. Do not evaluate further.
 
@@ -122,9 +123,11 @@ Scoring anchors:
 | 5–6/10 | Multiple criteria fail — **SPRINT FAIL** |
 | 1–4/10 | Feature not implemented — **SPRINT FAIL** |
 
-### Output file: `eval-result-N.md`
+### Output file: `.sprintfoundry/eval-results/eval-result-N.md`
 
-Always overwrite the same file for both initial checks and retries.
+Always overwrite the same file for both initial checks and retries. Create
+`.sprintfoundry/eval-results/` first if it does not exist, and do not write new
+eval-result files in the project root.
 
 ```markdown
 # Eval Result — Sprint {N}
@@ -160,7 +163,7 @@ Observation: {what you observed through the configured verification surface}
 
 ### Architecture drift — pause signal
 
-Write in `eval-result-N.md` when drift is detected:
+Write in `.sprintfoundry/eval-results/eval-result-N.md` when drift is detected:
 
 ```
 ARCHITECTURE DRIFT DETECTED

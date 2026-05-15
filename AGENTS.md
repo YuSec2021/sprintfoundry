@@ -17,7 +17,7 @@ Planner and Evaluator are sub-agents called by the Orchestrator skill via `Agent
 Generator is always Codex CLI via Bash — never a Claude sub-agent.
 
 The gate rule: Generator never writes `SPRINT PASS` or `SPRINT FAIL`. Only the
-Evaluator writes `eval-result-{N}.md`.
+Evaluator writes `.sprintfoundry/eval-results/eval-result-{N}.md`.
 
 > **Plugin source**: `plugin/` directory. Build: `bash scripts/package_plugin.sh`
 > **Example files**: `examples/` directory (run-state, planner-spec, sprint-contract, etc.)
@@ -32,7 +32,7 @@ State lives on disk, not in chat memory.
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done. Must be approved before code. |
 | `sprint-fence.json` | Orchestrator | Authorized sprint number and base commit. |
 | `eval-trigger.txt` | Generator | Signal after commit. Must contain exactly `sprint=N`. |
-| `eval-result-{N}.md` | Evaluator | Authoritative sprint verdict. |
+| `.sprintfoundry/eval-results/eval-result-{N}.md` | Evaluator | Authoritative sprint verdict kept out of the project root. |
 | `run-state.json` | Orchestrator | Cache: mode, retry count, pause state, branch state. |
 | `claude-progress.txt` | Generator | Compact handoff, not a transcript. |
 | `change-request.md` | User + Orchestrator | Classified product iteration. |
@@ -40,8 +40,11 @@ State lives on disk, not in chat memory.
 | `harness-audit.ndjson` | Orchestrator + hooks | Append-only forensic log. |
 | `init.sh` | Planner | Idempotent startup for the project under test. |
 
-Authoritative completion signal: `eval-result-{N}.md` exists and contains the
-literal string `SPRINT PASS`. Everything else is derived state.
+Authoritative completion signal:
+`.sprintfoundry/eval-results/eval-result-{N}.md` exists and contains the literal
+string `SPRINT PASS`. Everything else is derived state. Legacy root-level
+`eval-result-{N}.md` files may be read during migration, but new files belong
+in `.sprintfoundry/eval-results/`.
 
 ## Verification Modes
 
@@ -196,7 +199,7 @@ immediately after this. Do not inspect or start the next sprint.
 When invoked after SPRINT FAIL:
 
 - Fix only the cited Evaluator issues.
-- Do not depend on `eval-result-{N}.md` being present; Orchestrator may have
+- Do not depend on `.sprintfoundry/eval-results/eval-result-{N}.md` being present; Orchestrator may have
   inlined it into the prompt and deleted the file.
 - Keep the retry on the same sprint branch.
 - Commit with:
@@ -234,7 +237,7 @@ Stop and surface to Orchestrator/human when:
 ## Never
 
 - Never code before `CONTRACT APPROVED`.
-- Never self-evaluate or write `eval-result-{N}.md`.
+- Never self-evaluate or write `.sprintfoundry/eval-results/eval-result-{N}.md`.
 - Never write `SPRINT PASS` or `SPRINT FAIL`.
 - Never write to `run-state.json`.
 - Never implement multiple sprints in one Codex session.

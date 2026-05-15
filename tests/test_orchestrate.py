@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "orchestrate.py"
+EVAL_RESULTS_DIR = Path(".sprintfoundry") / "eval-results"
 
 
 def run_orchestrator(project_dir: Path, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -31,6 +32,13 @@ def run_git(project_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def write_eval_result(project_dir: Path, sprint: int, body: str) -> Path:
+    path = project_dir / EVAL_RESULTS_DIR / f"eval-result-{sprint}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return path
 
 
 def write_spec(path: Path) -> None:
@@ -253,7 +261,7 @@ def test_clears_contract_and_fence_after_sprint_pass(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
-    (tmp_path / "eval-result-1.md").write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
+    write_eval_result(tmp_path, 1, "## Verdict: SPRINT PASS\n")
 
     result = run_orchestrator(tmp_path, "--json")
     payload = json.loads(result.stdout)
@@ -264,6 +272,18 @@ def test_clears_contract_and_fence_after_sprint_pass(tmp_path: Path) -> None:
     assert not (tmp_path / "sprint-fence.json").exists(), (
         "sprint-fence.json must be deleted after SPRINT PASS"
     )
+
+
+def test_legacy_root_eval_result_files_still_work(tmp_path: Path) -> None:
+    """Existing projects may still have root-level eval-result files."""
+    write_spec(tmp_path / "planner-spec.json")
+    (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
+    (tmp_path / "eval-result-1.md").write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
+
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert payload["rule"] == "eval_trigger_has_pass"
 
 
 def test_next_sprint_requires_new_contract_after_pass(tmp_path: Path) -> None:
@@ -420,16 +440,17 @@ def test_retry_deletes_stale_eval_result_so_evaluator_can_recheck(tmp_path: Path
         encoding="utf-8",
     )
     (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
-    (tmp_path / "eval-result-1.md").write_text(
+    eval_path = write_eval_result(
+        tmp_path,
+        1,
         "## Verdict: SPRINT FAIL\n\nRequired fixes:\n1. Add CTA button\n",
-        encoding="utf-8",
     )
 
     result = run_orchestrator(tmp_path, "--json")
     payload = json.loads(result.stdout)
     assert payload["action"] == "invoke_codex_for_retry"
-    assert not (tmp_path / "eval-result-1.md").exists(), (
-        "eval-result-1.md must be deleted after routing to retry so the next "
+    assert not eval_path.exists(), (
+        ".sprintfoundry/eval-results/eval-result-1.md must be deleted after routing to retry so the next "
         "orchestrator round routes back to the Evaluator"
     )
 

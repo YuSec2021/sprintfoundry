@@ -23,7 +23,10 @@ After `init.sh`, Codex runs one smoke test before touching any code.
 ## Sprint workflow (four steps)
 
 ### Step 1 — Identify current sprint
-Lowest-numbered sprint in `planner-spec.json` with no `eval-result-N.md` containing `SPRINT PASS`.
+Lowest-numbered sprint in `planner-spec.json` with no
+`.sprintfoundry/eval-results/eval-result-N.md` containing `SPRINT PASS`.
+Legacy root-level eval-result files may be read during migration, but new
+Evaluator output belongs in `.sprintfoundry/eval-results/`.
 
 ### Step 2 — Propose sprint contract (if `sprint-contract.md` absent)
 
@@ -116,7 +119,7 @@ echo "Status: committed, pending Evaluator CHECK" >> claude-progress.txt
 
 ## Handling SPRINT FAIL (retry invocation)
 
-1. Read `eval-result-N.md` fully (Orchestrator inlines it into the prompt)
+1. Read `.sprintfoundry/eval-results/eval-result-N.md` fully (Orchestrator inlines it into the prompt)
 2. Fix **only** what the Evaluator cited
 3. `git commit -m "fix(sprint-N): address evaluator failure"`
 4. Write `eval-trigger.txt` with `sprint=N-retry` **before** updating progress log

@@ -29,6 +29,7 @@ from typing import Any
 
 
 AUDIT_FILE = "harness-audit.ndjson"
+EVAL_RESULTS_DIR = ".sprintfoundry/eval-results"
 
 
 def iso_now() -> str:
@@ -176,7 +177,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
     )
 
     verdicts: dict[int, str] = {}
-    for path in sorted(root.glob("eval-result-*.md")):
+    eval_paths = [
+        *root.glob(f"{EVAL_RESULTS_DIR}/eval-result-*.md"),
+        *root.glob("eval-result-*.md"),
+    ]
+    for path in sorted({p.resolve(): p for p in eval_paths}.values()):
         stem_tail = path.stem.split("-")[-1]
         if not stem_tail.isdigit():
             continue

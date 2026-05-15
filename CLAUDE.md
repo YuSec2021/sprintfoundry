@@ -32,7 +32,7 @@ autonomous-sprint-harness/
 │   ├── run-state.json
 │   ├── planner-spec.json
 │   ├── sprint-contract.md
-│   ├── eval-result-1.md
+│   ├── .sprintfoundry/eval-results/eval-result-1.md
 │   ├── bug-report.md
 │   ├── change-request.md
 │   └── human-escalation.md
@@ -82,7 +82,9 @@ cat run-state.json 2>/dev/null || echo "[no run-state]"
 cat claude-progress.txt 2>/dev/null || echo "[no progress]"
 cat eval-trigger.txt 2>/dev/null || echo "[no eval-trigger]"
 cat sprint-contract.md 2>/dev/null | head -40 || echo "[no contract]"
-ls eval-result-*.md 2>/dev/null || echo "[no eval results]"
+find .sprintfoundry/eval-results -maxdepth 1 -name 'eval-result-*.md' 2>/dev/null \
+  || ls eval-result-*.md 2>/dev/null \
+  || echo "[no eval results]"
 git branch --show-current 2>/dev/null || true
 git log --oneline -5 2>/dev/null || true
 ```

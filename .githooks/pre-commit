@@ -3,14 +3,14 @@
 #
 # Enforces the monotonic-PASS invariant at Git layer:
 #   A commit that touches code inside a sprint boundary is only allowed if
-#   every strictly-earlier sprint in planner-spec.json has an
-#   eval-result-{N}.md containing "SPRINT PASS".
+#   every strictly-earlier sprint in planner-spec.json has a
+#   .sprintfoundry/eval-results/eval-result-{N}.md containing "SPRINT PASS".
 #
 # This blocks the two historical failure modes observed in this repo:
 #   1. A "feat(sprint-N): ..." commit landing before Evaluator ran Sprint N-1
 #      (Sprint 1/2 bootstrap bypass).
 #   2. A manual "chore: sprint N complete, advance" commit that rewrites
-#      run-state.json / claude-progress.txt while eval-result-{N}.md still
+#      run-state.json / claude-progress.txt while the eval-result file still
 #      contains SPRINT FAIL (Sprint 3 override).
 #
 # Escape hatch: HARNESS_BYPASS=1 git commit ...  (use only for deliberate
@@ -63,7 +63,7 @@ sys.exit(0 if d.get('rule') != 'sprint_history_inconsistent' else 1)
         echo ""
         echo "  ✗ blocked by harness-pre-commit (sprint_history_inconsistent)."
         echo "    A sprint-advance commit requires every earlier sprint to have"
-        echo "    eval-result-{N}.md containing 'SPRINT PASS'."
+        echo "    .sprintfoundry/eval-results/eval-result-{N}.md containing 'SPRINT PASS'."
         echo "    See 'python3 scripts/orchestrate.py --check-only --json' for details."
         echo "    Emergency bypass: HARNESS_BYPASS=1 git commit ..."
         audit_log commit_blocked \
@@ -95,7 +95,11 @@ if not spec_path.exists():
 spec = json.loads(spec_path.read_text())
 
 passed = set()
-for p in pathlib.Path(".").glob("eval-result-*.md"):
+paths = [
+    *pathlib.Path(".").glob(".sprintfoundry/eval-results/eval-result-*.md"),
+    *pathlib.Path(".").glob("eval-result-*.md"),
+]
+for p in paths:
     sid_str = p.stem.split("-")[-1]
     if not sid_str.isdigit():
         continue

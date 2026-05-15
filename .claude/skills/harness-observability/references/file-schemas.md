@@ -74,7 +74,7 @@ Recommended sections:
 
 ## Files To Inspect
 - `run-state.json`
-- `eval-result-3.md`
+- `.sprintfoundry/eval-results/eval-result-3.md`
 - `sprint-contract.md`
 - `claude-progress.txt`
 

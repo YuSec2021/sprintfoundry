@@ -49,7 +49,9 @@ cat run-state.json      2>/dev/null || echo "[no run-state]"
 cat claude-progress.txt 2>/dev/null || echo "[no progress]"
 cat eval-trigger.txt    2>/dev/null || echo "[no eval-trigger]"
 cat sprint-contract.md  2>/dev/null | head -5 || echo "[no contract]"
-ls eval-result-*.md     2>/dev/null || echo "[no eval results]"
+find .sprintfoundry/eval-results -maxdepth 1 -name 'eval-result-*.md' 2>/dev/null \
+  || ls eval-result-*.md 2>/dev/null \
+  || echo "[no eval results]"
 git branch --show-current 2>/dev/null || true
 git log --oneline -5    2>/dev/null || true
 ```
@@ -91,7 +93,13 @@ Keep: one 5-line project summary + latest 3 sprint entries (3–5 lines each).
 
 ## Sprint history audit — runs before every routing rule
 
-The **only** completion signal is `eval-result-{N}.md` containing `SPRINT PASS`.
+The **only** completion signal is `.sprintfoundry/eval-results/eval-result-{N}.md`
+containing `SPRINT PASS`.
+
+Evaluator verdicts live under `.sprintfoundry/eval-results/` so long projects do
+not clutter the repository root. For backwards compatibility, Orchestrator may
+also read legacy root-level `eval-result-{N}.md` files, but new Evaluator output
+must use the hidden directory.
 
 ```bash
 python3 - <<'PY'
@@ -103,7 +111,11 @@ run_state = json.loads(pathlib.Path("run-state.json").read_text()) \
     if pathlib.Path("run-state.json").exists() else {}
 
 passed, failed = set(), set()
-for p in pathlib.Path(".").glob("eval-result-*.md"):
+paths = [
+    *pathlib.Path(".").glob(".sprintfoundry/eval-results/eval-result-*.md"),
+    *pathlib.Path(".").glob("eval-result-*.md"),
+]
+for p in paths:
     sid = p.stem.split("-")[-1]
     if not sid.isdigit(): continue
     txt = p.read_text(errors="ignore")
@@ -113,7 +125,7 @@ declared = int(run_state.get("last_successful_sprint", 0) or 0)
 findings = []
 if declared > 0 and declared not in passed:
     findings.append(f"run-state claims last_successful_sprint={declared} "
-                    f"but eval-result-{declared}.md lacks SPRINT PASS")
+                    f"but .sprintfoundry/eval-results/eval-result-{declared}.md lacks SPRINT PASS")
 for s in sorted(int(x["id"]) for x in spec.get("sprints", []) if not x.get("skipped")):
     if s < declared and s not in passed:
         kind = "fail_bypassed" if s in failed else "evaluator_skipped"
@@ -147,17 +159,17 @@ Read `references/planner-agent.md` first.
 
 Parse N from `eval-trigger.txt`:
 - `sprint=N` → initial attempt
-- `sprint=N-retry` → retry (same result file — evaluator always writes `eval-result-N.md`)
+- `sprint=N-retry` → retry (same result file — evaluator always writes `.sprintfoundry/eval-results/eval-result-N.md`)
 
 ```
-IF eval-result-N.md contains "SPRINT PASS"
+IF .sprintfoundry/eval-results/eval-result-N.md contains "SPRINT PASS"
   → rm eval-trigger.txt
     Run auto-version bump (see Auto-Version Policy below)
     Append "Sprint N: PASS — {date} — {new_version}" to claude-progress.txt
     Update run-state.json: last_successful_sprint=N, retry_count=0, current_version={new_version}
     → Proceed to Rule 6
 
-IF eval-result-N.md contains "SPRINT FAIL"
+IF .sprintfoundry/eval-results/eval-result-N.md contains "SPRINT FAIL"
   IF contains "Verification tool unavailable"
     → pause: mode="paused", needs_human=true, last_failure_reason="Verification tool unavailable"
   ELSE IF contains "ARCHITECTURE DRIFT DETECTED"
@@ -166,11 +178,11 @@ IF eval-result-N.md contains "SPRINT FAIL"
     → pause: mode="paused", needs_human=true, last_failure_reason="max retries exceeded"
   ELSE
     → increment run-state.json: retry_count += 1, last_run_at = now()
-      inline eval-result-N.md body into codex prompt
-      delete eval-result-N.md
+      inline .sprintfoundry/eval-results/eval-result-N.md body into codex prompt
+      delete .sprintfoundry/eval-results/eval-result-N.md
       → Codex retry (see commands below)
 
-IF no eval-result-N.md yet
+IF no .sprintfoundry/eval-results/eval-result-N.md yet
   → Proceed to Rule 2.1 (Quality Gate) before invoking Evaluator.
 ```
 
@@ -299,7 +311,8 @@ Full product direction change — Planner substantially rewrites the spec.
 
 ### Rule 6 — Ready for next sprint
 ```
-Find N = lowest sprint ID in planner-spec.json with no "SPRINT PASS" eval-result.
+Find N = lowest sprint ID in planner-spec.json with no "SPRINT PASS" eval result
+under `.sprintfoundry/eval-results/` (legacy root files may be read during migration).
 IF all sprints have SPRINT PASS → Rule 7
 ELSE
   Before invoking Codex, create/switch sprint branch:
@@ -348,7 +361,7 @@ before any other cleanup. No human input required.
 **→ Major bump (X+1.0.0)** if any of:
 - `run-state.json sprint_origin` is `"major_feature"` or `"replan"`
 - `sprint-contract.md` contains any of: `breaking`, `remove `, `replace `, `deprecate`, `migrate`, `incompatible`
-- `eval-result-N.md` contains `ARCHITECTURE DRIFT DETECTED`
+- `.sprintfoundry/eval-results/eval-result-N.md` contains `ARCHITECTURE DRIFT DETECTED`
 - Any sprint in `planner-spec.json` was newly marked `skipped: true` since the last bump
 
 **→ Patch bump (x.y.Z+1)** if all of:
@@ -369,8 +382,10 @@ origin = run_state.get("sprint_origin", "feature")
 current = run_state.get("current_version", "0.0.0")
 contract = pathlib.Path("sprint-contract.md").read_text(errors="ignore") \
            if pathlib.Path("sprint-contract.md").exists() else ""
-eval_glob = sorted(pathlib.Path(".").glob("eval-result-*.md"),
-                   key=lambda p: int(re.search(r"\d+", p.stem).group()))
+eval_glob = sorted([
+    *pathlib.Path(".").glob(".sprintfoundry/eval-results/eval-result-*.md"),
+    *pathlib.Path(".").glob("eval-result-*.md"),
+], key=lambda p: int(re.search(r"\d+", p.stem).group()))
 eval_text = eval_glob[-1].read_text(errors="ignore") if eval_glob else ""
 
 major, minor, patch = map(int, current.split("."))
@@ -436,7 +451,7 @@ If a `major_feature` or `replan` change contradicts an already-passed sprint's c
 
 1. **Do not silently proceed.** Surface the conflict to the user before Planner runs.
 2. Planner either marks the old sprint `"skipped": true` (the change supersedes it) or adds a new superseding sprint.
-3. The old `eval-result-N.md` is **never deleted** — it remains as an audit record.
+3. The old `.sprintfoundry/eval-results/eval-result-N.md` is **never deleted** — it remains as an audit record.
 4. The version bump for the replan sprint will be `major` automatically.
 
 ---
@@ -463,7 +478,7 @@ codex exec --full-auto \
    After committing, write eval-trigger.txt containing exactly: sprint=N.
    STOP IMMEDIATELY after writing eval-trigger.txt. Follow AGENTS.md."
 
-# Fix after SPRINT FAIL (inline the eval-result body before running)
+# Fix after SPRINT FAIL (inline the eval result body before running)
 codex exec --full-auto \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
@@ -472,7 +487,7 @@ codex exec --full-auto \
    Re-commit and write eval-trigger.txt containing exactly: sprint=N-retry.
    STOP after writing eval-trigger.txt. Follow AGENTS.md.
    --- EVALUATOR VERDICT ---
-   {paste eval-result-N.md body here}"
+   {paste .sprintfoundry/eval-results/eval-result-N.md body here}"
 ```
 
 > **Note**: If `scripts/orchestrate.py` exists, use its emitted command instead:
@@ -529,11 +544,11 @@ Never infer state from conversation history alone.
 ## Hard rules
 
 - Never write application code.
-- Never evaluate sprint quality or write `eval-result-*.md`.
+- Never evaluate sprint quality or write `.sprintfoundry/eval-results/eval-result-*.md`.
 - Never automatically clear `needs_human=true` — only a human edit clears it.
 - Never skip the startup state-read.
 - Never invoke `Agent(subagent_type="generator")` — Generator is always Codex via Bash.
-- Never advance the sprint counter without a `SPRINT PASS` in `eval-result-N.md`.
+- Never advance the sprint counter without a `SPRINT PASS` in `.sprintfoundry/eval-results/eval-result-N.md`.
 - Never rewrite `harness-audit.ndjson` — it is append-only.
 
 ---

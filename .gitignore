@@ -6,6 +6,7 @@ harness-audit.ndjson
 eval-trigger.txt
 sprint-contract.md
 sprint-fence.json
+.sprintfoundry/
 claude-progress.txt
 eval-result-*.md
 quality-gate-*.md

@@ -71,7 +71,7 @@ Important boundaries:
 - Claude does not write application code.
 - Codex does not evaluate its own output.
 - Progress advances through file artifacts, not chat memory.
-- A sprint is complete only when `eval-result-{N}.md` contains `SPRINT PASS`.
+- A sprint is complete only when `.sprintfoundry/eval-results/eval-result-{N}.md` contains `SPRINT PASS`.
 
 ## Main Flow
 
@@ -136,14 +136,14 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 | `sprint-fence.json` | Orchestrator | Expected sprint number and base commit before implementation starts |
 | `eval-trigger.txt` | Generator | Signal that a committed sprint is ready for quality gate and evaluation |
 | `quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK |
-| `eval-result-{N}.md` | Evaluator | Sprint verdict and evidence; only `SPRINT PASS` completes a sprint |
+| `.sprintfoundry/eval-results/eval-result-{N}.md` | Evaluator | Sprint verdict and evidence; only `SPRINT PASS` completes a sprint |
 | `run-state.json` | Orchestrator | Current mode, retry counters, active branch, pause state, version metadata |
 | `claude-progress.txt` | Generator + Orchestrator | Compact rolling handoff, not a transcript |
 | `change-request.md` | User + Orchestrator | Classified iteration request: bugfix, minor feature, major feature, or replan |
 | `bug-report.md` | User + Orchestrator | Dedicated regression intake for tightly scoped bugfix sprints |
 | `human-escalation.md` | Orchestrator | Current pause reason and recommended human action |
 
-Runtime logs such as `run-state.json`, `eval-result-*.md`, `quality-gate-*.md`, `VERSION`, and `CHANGELOG.md` are ignored in this repository because they belong to consuming projects.
+Runtime logs such as `run-state.json`, `.sprintfoundry/`, `eval-result-*.md` legacy files, `quality-gate-*.md`, `VERSION`, and `CHANGELOG.md` are ignored in this repository because they belong to consuming projects.
 
 ## Quality Gate
 

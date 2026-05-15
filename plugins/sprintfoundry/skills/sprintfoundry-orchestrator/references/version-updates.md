@@ -6,7 +6,8 @@ The Orchestrator decides the bump level — you never need to specify a version 
 ## 0. Auto-version decision — how the Orchestrator decides
 
 Each sprint carries a `sprint_origin` label set at the moment the sprint is initiated.
-Together with keywords found in `sprint-contract.md` and `eval-result-N.md`, this
+Together with keywords found in `sprint-contract.md` and
+`.sprintfoundry/eval-results/eval-result-N.md`, this
 determines the semver bump applied immediately after `SPRINT PASS` is confirmed.
 
 ### Decision table
@@ -267,7 +268,7 @@ or explicitly abandon the current sprint first.
 Read planner-spec.json and change-request.md.
 Revise planner-spec.json for the new product direction.
 Rules:
-- Preserve all sprint entries that have a corresponding eval-result-N.md
+- Preserve all sprint entries that have a corresponding `.sprintfoundry/eval-results/eval-result-N.md`
   containing "SPRINT PASS" — set them to skipped: false (they are history, keep them).
 - For any sprint that has NOT been completed (no SPRINT PASS), you may:
   - Mark it "skipped": true if it is no longer needed, OR
@@ -289,6 +290,8 @@ New direction sprints                → IDs 6, 7, 8, … (always higher)
 ```
 
 Never renumber. The sprint history audit depends on stable IDs matching eval-result filenames.
+New eval-result files live in `.sprintfoundry/eval-results/`; legacy root files
+may be read during migration.
 
 ### After Planner completes
 
@@ -388,7 +391,10 @@ python3 - <<'PY'
 import pathlib, re
 
 results = sorted(
-    pathlib.Path(".").glob("eval-result-*.md"),
+    [
+        *pathlib.Path(".").glob(".sprintfoundry/eval-results/eval-result-*.md"),
+        *pathlib.Path(".").glob("eval-result-*.md"),
+    ],
     key=lambda p: int(re.search(r"\d+", p.stem).group())
 )
 
@@ -454,7 +460,7 @@ Does the new feature change the external surface of an already-PASS sprint?
        ├─ Is the old sprint's contract intentionally superseded?
        │    → Planner marks old sprint "skipped": true in planner-spec.json
        │      and documents the incompatibility in claude-progress.txt.
-       │      Old eval-result-N.md is NEVER deleted — it remains as audit record.
+       │      Old .sprintfoundry/eval-results/eval-result-N.md is NEVER deleted — it remains as audit record.
        │
        └─ Is the old sprint's contract still valid but the implementation drifted?
             → Treat as architecture drift. Pause with needs_human=true.

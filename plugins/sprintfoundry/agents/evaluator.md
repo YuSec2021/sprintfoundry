@@ -89,7 +89,8 @@ bash init.sh
 ```
 
 `eval-trigger.txt` may contain either `sprint=N` or `sprint=N-retry`. In both
-cases, N is the sprint number and you write (or overwrite) `eval-result-N.md`.
+cases, N is the sprint number and you write (or overwrite)
+`.sprintfoundry/eval-results/eval-result-N.md`.
 The `-retry` suffix is metadata for the Orchestrator only; it does not affect
 your evaluation process or output file name.
 
@@ -187,8 +188,10 @@ but requires workarounds or produces errors.
 
 ### Output file
 
-Write `eval-result-{N}.md` in this structure. **Always overwrite the same file
-for both initial checks and retries** — there is no `eval-result-{N}-retry.md`.
+Write `.sprintfoundry/eval-results/eval-result-{N}.md` in this structure.
+Create `.sprintfoundry/eval-results/` first if needed. **Always overwrite the
+same file for both initial checks and retries** — there is no
+`eval-result-{N}-retry.md`.
 The eval-trigger.txt suffix (`sprint=N-retry`) signals a retry to the
 Orchestrator, but the Evaluator's output file name never changes.
 
@@ -242,7 +245,8 @@ distinguish drift from an ordinary local defect:
 | A single criterion has failed the same root cause across 2+ retries without improvement | Architecture drift |
 | A fix can be made in < 30 lines touching < 3 files | Local defect — **not** drift |
 
-When you classify a failure as architecture drift, write in `eval-result-{N}.md`:
+When you classify a failure as architecture drift, write in
+`.sprintfoundry/eval-results/eval-result-{N}.md`:
 
 ```
 ARCHITECTURE DRIFT DETECTED

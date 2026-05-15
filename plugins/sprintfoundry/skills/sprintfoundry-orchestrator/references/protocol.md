@@ -12,7 +12,7 @@ State lives in files, never in conversation memory.
 |------|-------|---------|
 | `planner-spec.json` | Planner | Source of truth — product spec and sprint list |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done — deleted by Orchestrator after SPRINT PASS |
-| `eval-result-{N}.md` | Evaluator | Per-sprint scores and critique |
+| `.sprintfoundry/eval-results/eval-result-{N}.md` | Evaluator | Per-sprint scores and critique; kept out of the project root |
 | `eval-trigger.txt` | Generator | Signal file: `sprint=N` written after commit |
 | `sprint-fence.json` | Orchestrator | Records expected sprint + base git commit before Codex starts |
 | `run-state.json` | Orchestrator | Unattended mode state, retry counters, pause/escalation flags |
@@ -37,7 +37,7 @@ After initial planning, all new work is classified before Generator sees it:
 2. APPROVAL    Evaluator writes "CONTRACT APPROVED"
                Orchestrator writes sprint-fence.json
 3. IMPLEMENT   Codex implements Sprint N ONLY → writes eval-trigger.txt → STOPS
-4. EVALUATE    Evaluator runs black-box CHECK → writes eval-result-N.md
+4. EVALUATE    Evaluator runs black-box CHECK → writes .sprintfoundry/eval-results/eval-result-N.md
 
 SPRINT PASS?
   Yes → Orchestrator deletes sprint-contract.md, sprint-fence.json, eval-trigger.txt
@@ -52,12 +52,15 @@ Its presence always means "sprint in progress."
 
 ## Monotonic-PASS Invariant
 
-The **only** completion signal is `eval-result-{N}.md` containing the literal string `SPRINT PASS`.
+The **only** completion signal is `.sprintfoundry/eval-results/eval-result-{N}.md`
+containing the literal string `SPRINT PASS`.
 
 Everything else is derived state (run-state.json, claude-progress.txt, branch names).
 
-The Orchestrator re-derives which sprints passed from eval-result files on every invocation.
-It never trusts `run-state.json` for advancement decisions.
+The Orchestrator re-derives which sprints passed from eval-result files on every
+invocation. It reads the hidden directory first and may read legacy root-level
+`eval-result-{N}.md` files during migration. It never trusts `run-state.json`
+for advancement decisions.
 
 ---
 
@@ -134,7 +137,7 @@ python3 scripts/harness-log.py note --text "reason for manual action"
 
 | Failure mode | What used to happen | How the invariant blocks it |
 |--------------|---------------------|-----------------------------|
-| Bootstrap bypass | Codex writes Sprint 1 code + spec in one commit, skipping contract/eval-trigger | Audit fires: "eval-result-1.md is missing but Sprint ≥ 2 in progress" |
+| Bootstrap bypass | Codex writes Sprint 1 code + spec in one commit, skipping contract/eval-trigger | Audit fires: ".sprintfoundry/eval-results/eval-result-1.md is missing but Sprint ≥ 2 in progress" |
 | Manual FAIL override | `chore: sprint N complete` commit rewrites run-state while eval-result still says SPRINT FAIL | Pre-commit hook rejects; orchestrator pauses on next routing call |
 | Non-contiguous PASS | Sprint K marked PASS while Sprint M < K has no eval-result | Audit flags `evaluator_skipped`/`fail_bypassed` for every gap |
 | Silent manual override | Human edits run-state.json with no audit trail | Post-commit hook records `commit_recorded` flagging run-state.json as sensitive |

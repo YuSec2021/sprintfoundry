@@ -69,7 +69,7 @@ State lives in files, never in conversation memory.
 | `bug-report.md` | User + Orchestrator | Dedicated regression/defect intake used to create tightly scoped bugfix sprints |
 | `claude-progress.txt` | Generator | Cross-session handoff log |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done — **deleted by Orchestrator after SPRINT PASS** |
-| `eval-result-{N}.md` | Evaluator | Per-sprint scores and critique |
+| `.sprintfoundry/eval-results/eval-result-{N}.md` | Evaluator | Per-sprint scores and critique |
 | `eval-trigger.txt` | Generator | Signal file: `sprint=N` written after commit — **must match the fenced sprint** |
 | `sprint-fence.json` | Orchestrator | Written before Codex starts implementing; records expected sprint + base git commit. Any eval-trigger.txt that names a different sprint triggers an immediate boundary-violation pause. |
 | `run-state.json` | Orchestrator | Unattended mode state, retry counters, pause/escalation flags — **cache, not truth** |
@@ -115,7 +115,7 @@ The goal is hands-off progress with explicit stop conditions, not infinite auton
   the next sprint — zeroes the counter. Otherwise the retry budget for a stubborn
   sprint would be silently unbounded.
 - When the Orchestrator routes to `invoke_codex_for_retry` it **inlines** the
-  body of `eval-result-{N}.md` into the Codex prompt and **deletes** the file
+  body of `.sprintfoundry/eval-results/eval-result-{N}.md` into the Codex prompt and **deletes** the file
   before Codex runs. This forces the next round to re-invoke the Evaluator on
   the retry commit instead of looping on a stale FAIL verdict. Codex must never
   depend on the file still being on disk during the retry — the verdict lives
@@ -320,7 +320,7 @@ Before writing any code, re-read only the artifacts needed for the current sprin
 
 - `planner-spec.json`
 - `sprint-contract.md`
-- latest relevant `eval-result-{N}.md` when retrying
+- latest relevant `.sprintfoundry/eval-results/eval-result-{N}.md` when retrying
 
 Do not treat old chat context as authoritative.
 
@@ -334,7 +334,7 @@ Before implementation starts, ensure you are on the correct sprint branch:
 
 **Step 1 — Identify current sprint**
 
-Read `planner-spec.json`. Find the lowest-numbered sprint with no `eval-result-{N}.md`
+Read `planner-spec.json`. Find the lowest-numbered sprint with no `.sprintfoundry/eval-results/eval-result-{N}.md`
 containing "SPRINT PASS". That is the current sprint.
 
 **Step 2 — Propose sprint contract** (if `sprint-contract.md` absent)
@@ -440,7 +440,7 @@ If necessary, rewrite older entries into a short summary before appending the ne
 
 When invoked after a SPRINT FAIL:
 
-1. Read `eval-result-{N}.md` fully.
+1. Read `.sprintfoundry/eval-results/eval-result-{N}.md` fully.
 2. Fix only what the Evaluator cited.
 3. `git commit -m "fix(sprint-<N>): address evaluator failure"`
 4. Write `eval-trigger.txt` **before** updating `claude-progress.txt`:
@@ -476,7 +476,7 @@ When invoked after a SPRINT FAIL:
 
 **Runs**: twice per sprint — contract review before coding, black-box CHECK after commit.
 
-**Output**: "CONTRACT APPROVED" in `sprint-contract.md` (Mode 1), or `eval-result-{N}.md` (Mode 2).
+**Output**: "CONTRACT APPROVED" in `sprint-contract.md` (Mode 1), or `.sprintfoundry/eval-results/eval-result-{N}.md` (Mode 2).
 
 ### Mode 1 — Contract Review
 
@@ -509,7 +509,7 @@ git diff "$(git merge-base HEAD main)"..HEAD --stat
 
 Compare the full sprint branch diff against the sprint contract. Flag any files
 or behaviour outside the contracted scope as a Craft defect in
-`eval-result-{N}.md`. Scope violations do not auto-fail a sprint but reduce the
+`.sprintfoundry/eval-results/eval-result-{N}.md`. Scope violations do not auto-fail a sprint but reduce the
 Craft score.
 
 Execute each test step through the configured verification surface:
@@ -532,7 +532,7 @@ Execute each test step through the configured verification surface:
 Functionality < 8 always fails the sprint.
 Be harder on Originality than feels comfortable — the model defaults to safe.
 
-**Write `eval-result-{N}.md`**:
+**Write `.sprintfoundry/eval-results/eval-result-{N}.md`**:
 
 ```markdown
 # Eval Result — Sprint <N>
@@ -571,7 +571,7 @@ the implementation alone**. Objective criteria for classification:
 | Same root cause has failed across 2+ retries without improvement | Architecture drift |
 | Fix can be made in < 30 lines touching < 3 files | Local defect — **not** drift |
 
-When drift is detected, write in `eval-result-{N}.md`:
+When drift is detected, write in `.sprintfoundry/eval-results/eval-result-{N}.md`:
 
 ```
 ARCHITECTURE DRIFT DETECTED
@@ -607,7 +607,7 @@ Every sprint must pass through all four phases in order.  No phase may be skippe
 │       │         Writes eval-trigger.txt  → STOPS        │
 │       ▼                                                 │
 │  4. EVALUATE    Evaluator runs black-box CHECK          │
-│       │         Writes eval-result-N.md                 │
+│       │         Writes .sprintfoundry/eval-results/eval-result-N.md                 │
 │       ▼                                                 │
 │  SPRINT PASS?  ──Yes──▶  Orchestrator deletes           │
 │                          sprint-contract.md             │
@@ -632,7 +632,7 @@ coding without a freshly approved contract.
 
 The **only** signal that Sprint N is complete is:
 
-> `eval-result-{N}.md` exists AND contains the literal string `SPRINT PASS`.
+> `.sprintfoundry/eval-results/eval-result-{N}.md` exists AND contains the literal string `SPRINT PASS`.
 
 Everything else is derived state:
 
@@ -643,12 +643,12 @@ Everything else is derived state:
 ### Consequences
 
 1. The Orchestrator re-derives "which sprints have passed" from
-   `eval-result-{N}.md` files on every invocation; it never trusts
+   `.sprintfoundry/eval-results/eval-result-{N}.md` files on every invocation; it never trusts
    `run-state.json` for advancement decisions.
 2. The Orchestrator runs an audit (`audit_sprint_history` in
    `scripts/orchestrate.py`) **before every routing rule**. If declared state
    disagrees with the eval-result files — e.g. Sprint N marked advanced while
-   `eval-result-{N}.md` is missing or contains `SPRINT FAIL` — the
+   `.sprintfoundry/eval-results/eval-result-{N}.md` is missing or contains `SPRINT FAIL` — the
    Orchestrator pauses with `needs_human=true` before any other rule can fire.
 3. The Orchestrator refuses to start Sprint N while any prior Sprint 1..N-1
    lacks a `SPRINT PASS` eval-result, even if a human tries to edit
@@ -671,7 +671,7 @@ Events written to it:
 - `orchestrator_run` — every invocation: `{rule, action, mode, needs_human, rationale}`.
 - `audit_finding` — every `audit_sprint_history` violation, one line per finding.
 - `state_transition` — every change to `run-state.json` with `{key: [old, new]}` diffs.
-- `eval_result_observed` — snapshot of every `eval-result-{N}.md` verdict on
+- `eval_result_observed` — snapshot of every `.sprintfoundry/eval-results/eval-result-{N}.md` verdict on
   each orchestrator run, so offline auditors can reconstruct the verdict
   timeline from the log alone.
 - `commit_recorded` — written by `.githooks/post-commit` for every commit
@@ -699,8 +699,8 @@ python3 scripts/harness-log.py note --text "reason" # annotate a manual action
 
 | Failure mode | What used to happen | How the invariant blocks it |
 |--------------|---------------------|-----------------------------|
-| **Bootstrap bypass** | Codex writes Sprint 1 code + `planner-spec.json` in one commit, skipping contract/eval-trigger; later sprints proceed. | Audit fires on next orchestrator run: "eval-result-1.md is missing but Sprint ≥ 2 is already in progress". |
-| **Manual FAIL override** | `chore: sprint N complete, advance to N+1` commit rewrites `run-state.json` while `eval-result-N.md` still says SPRINT FAIL. | (a) pre-commit hook rejects the commit subject pattern when audit fails; (b) if bypassed, the orchestrator pauses on the very next routing call. |
+| **Bootstrap bypass** | Codex writes Sprint 1 code + `planner-spec.json` in one commit, skipping contract/eval-trigger; later sprints proceed. | Audit fires on next orchestrator run: ".sprintfoundry/eval-results/eval-result-1.md is missing but Sprint ≥ 2 is already in progress". |
+| **Manual FAIL override** | `chore: sprint N complete, advance to N+1` commit rewrites `run-state.json` while `.sprintfoundry/eval-results/eval-result-N.md` still says SPRINT FAIL. | (a) pre-commit hook rejects the commit subject pattern when audit fails; (b) if bypassed, the orchestrator pauses on the very next routing call. |
 | **Non-contiguous PASS** | Sprint K marked PASS while some Sprint M \< K has no eval-result. | Audit flags `evaluator_skipped` / `fail_bypassed` for every gap. |
 | **Silent manual override** | Human edits `run-state.json` directly, no audit trail, root-cause takes hours to find. | `post-commit` hook writes a `commit_recorded` entry flagging `run-state.json` as sensitive; `orchestrator_run` writes `state_transition` diffs on every invocation. |
 
@@ -748,7 +748,7 @@ codex exec --full-auto \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
-  "Sprint N failed. Read eval-result-N.md. Fix only the cited issues. Re-commit and update eval-trigger.txt."
+  "Sprint N failed. Read .sprintfoundry/eval-results/eval-result-N.md. Fix only the cited issues. Re-commit and update eval-trigger.txt."
 ```
 
 ---

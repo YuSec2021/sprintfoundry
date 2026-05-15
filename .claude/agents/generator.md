@@ -47,7 +47,7 @@ Before implementation, re-read only the current sprint artifacts you need:
 
 - `planner-spec.json`
 - `sprint-contract.md`
-- latest relevant `eval-result-{N}.md` if retrying
+- latest relevant `.sprintfoundry/eval-results/eval-result-{N}.md` if retrying
 
 Do not rely on prior chat context as your source of truth.
 
@@ -58,7 +58,9 @@ Do not rely on prior chat context as your source of truth.
 ### Step 1 — Identify the current sprint
 
 Read `planner-spec.json`. The current sprint is the lowest-numbered sprint with
-no corresponding `eval-result-{N}.md` containing `SPRINT PASS`.
+no corresponding `.sprintfoundry/eval-results/eval-result-{N}.md` containing
+`SPRINT PASS`. Legacy root-level eval results may be read during migration, but
+new Evaluator output belongs in `.sprintfoundry/eval-results/`.
 
 ### Step 2 — Propose sprint contract or detect state
 
@@ -213,7 +215,7 @@ Keep `claude-progress.txt` compact by rewriting older entries into a short summa
 
 When a sprint fails:
 
-1. Read `eval-result-{N}.md` fully
+1. Read `.sprintfoundry/eval-results/eval-result-{N}.md` fully
 2. Fix only the cited issues
 3. Re-commit with:
 

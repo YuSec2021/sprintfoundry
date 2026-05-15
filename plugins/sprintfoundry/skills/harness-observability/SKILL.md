@@ -24,7 +24,7 @@ Read only the minimum needed:
 - `run-state.json` if present
 - `claude-progress.txt` if present
 - `sprint-contract.md` if present
-- latest `eval-result-{N}.md` relevant to the current sprint
+- latest `.sprintfoundry/eval-results/eval-result-{N}.md` relevant to the current sprint
 
 If you need field details or event names, read:
 

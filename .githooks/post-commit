@@ -22,7 +22,8 @@ FILES_JSON="$(git show --pretty='' --name-only HEAD 2>/dev/null | \
     2>/dev/null || echo '[]')"
 
 # Try to spot touches on files that should only change through the
-# harness (run-state.json, eval-result-*.md, sprint-contract.md) so
+# harness (run-state.json, .sprintfoundry/eval-results/eval-result-*.md,
+# sprint-contract.md) so
 # auditors can quickly find manual-override candidates.
 SENSITIVE_JSON="$(python3 - "$FILES_JSON" <<'PY' 2>/dev/null || echo '[]'
 import json, re, sys
@@ -34,6 +35,8 @@ for f in files:
     elif f == "claude-progress.txt":
         sensitive.append(f)
     elif re.match(r"^eval-result-\d+\.md$", f):
+        sensitive.append(f)
+    elif re.match(r"^\.sprintfoundry/eval-results/eval-result-\d+\.md$", f):
         sensitive.append(f)
     elif f == "sprint-contract.md":
         sensitive.append(f)

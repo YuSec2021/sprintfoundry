@@ -20,6 +20,8 @@ SPRINT_PASS = "SPRINT PASS"
 SPRINT_FAIL = "SPRINT FAIL"
 CONTRACT_APPROVED = "CONTRACT APPROVED"
 CODEX_EXEC_MODERN_MIN_VERSION = (0, 120, 0)
+HARNESS_DIR = ".sprintfoundry"
+EVAL_RESULTS_DIR = f"{HARNESS_DIR}/eval-results"
 
 
 def iso_now() -> str:
@@ -96,6 +98,24 @@ def extract_sprint_id(value: str) -> int | None:
 def eval_sprint_id(path: Path) -> int | None:
     match = re.search(r"eval-result-(\d+)", path.name)
     return int(match.group(1)) if match else None
+
+
+def eval_result_paths(root: Path) -> list[Path]:
+    """Return eval-result files from the hidden harness dir plus legacy root files.
+
+    New projects write evaluator verdicts under .sprintfoundry/eval-results/ so
+    long sprint histories do not clutter the project root. Root-level files are
+    still read for backwards compatibility with older harness runs.
+    """
+    candidates = [
+        *root.glob(f"{EVAL_RESULTS_DIR}/eval-result-*.md"),
+        *root.glob("eval-result-*.md"),
+    ]
+    return sorted({path.resolve(): path for path in candidates}.values())
+
+
+def eval_result_path(root: Path, sprint_id: int) -> Path:
+    return root / EVAL_RESULTS_DIR / f"eval-result-{sprint_id}.md"
 
 
 def parse_semver(version: str) -> tuple[int, int, int] | None:
@@ -509,7 +529,10 @@ class HarnessProject:
         return json.loads(read_text(self.spec_path))
 
     def eval_results(self) -> list[Path]:
-        return sorted(self.root.glob("eval-result-*.md"))
+        return eval_result_paths(self.root)
+
+    def eval_result_path(self, sprint_id: int) -> Path:
+        return eval_result_path(self.root, sprint_id)
 
     def passing_sprints(self) -> set[int]:
         passed: set[int] = set()
@@ -542,7 +565,10 @@ class HarnessProject:
         return True
 
     def latest_failed_eval(self, sprint_id: int) -> Path | None:
-        candidates = sorted(self.root.glob(f"eval-result-{sprint_id}*.md"))
+        candidates = [
+            path for path in self.eval_results()
+            if eval_sprint_id(path) == sprint_id
+        ]
         for path in reversed(candidates):
             if SPRINT_FAIL in read_text(path):
                 return path
@@ -995,7 +1021,10 @@ def log_decision(project: HarnessProject, decision: RouteDecision) -> None:
             event="eval_result_observed",
             actor="orchestrator",
             sprint=sid,
-            payload={"verdict": verdict, "file": path.name},
+            payload={
+                "verdict": verdict,
+                "file": str(path.relative_to(project.root)),
+            },
         )
 
 
@@ -1014,9 +1043,12 @@ def maybe_cleanup_sprint_artifacts(project: HarnessProject, decision: RouteDecis
         # eval-trigger.txt without any eval-result and routes to the
         # Evaluator instead of another Codex retry. The retry prompt already
         # inlined the verdict body, so Codex does not need the file.
-        stale = project.root / f"eval-result-{decision.current_sprint}.md"
-        if stale.exists():
-            stale.unlink()
+        for stale in (
+            project.eval_result_path(decision.current_sprint),
+            project.root / f"eval-result-{decision.current_sprint}.md",
+        ):
+            if stale.exists():
+                stale.unlink()
 
 
 def prepare_branch_for_decision(project: HarnessProject, decision: RouteDecision) -> RouteDecision:
