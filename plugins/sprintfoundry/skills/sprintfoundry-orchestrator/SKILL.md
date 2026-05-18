@@ -45,6 +45,8 @@ Load these from `references/` when you need deep details:
 ## Session startup — run every time before doing anything else
 
 ```bash
+cat VERSION             2>/dev/null || echo "[no VERSION]"
+cat MEMORY.md           2>/dev/null | tail -15 || echo "[no MEMORY.md]"
 cat run-state.json      2>/dev/null || echo "[no run-state]"
 cat claude-progress.txt 2>/dev/null || echo "[no progress]"
 cat eval-trigger.txt    2>/dev/null || echo "[no eval-trigger]"
@@ -55,6 +57,51 @@ find .sprintfoundry/eval-results -maxdepth 1 -name 'eval-result-*.md' 2>/dev/nul
 git branch --show-current 2>/dev/null || true
 git log --oneline -5    2>/dev/null || true
 ```
+
+After reading these files, extract two values for use throughout this session:
+
+```bash
+python3 - <<'PY'
+import json, pathlib, re
+
+# Machine-readable current version. VERSION is primary; MEMORY.md is fallback
+# recovery metadata if VERSION is missing.
+version_file = pathlib.Path("VERSION")
+if version_file.exists():
+    current_version = version_file.read_text().strip().lstrip("v") or "0.0.0"
+else:
+    mem = pathlib.Path("MEMORY.md")
+    current_version = "0.0.0"
+    if mem.exists():
+        for line in reversed(mem.read_text().splitlines()):
+            if line.startswith("## Latest version:"):
+                current_version = line.split(":")[-1].strip().lstrip("v") or "0.0.0"
+                break
+
+# Highest allocated sprint ID (for computing next new sprint ID)
+mem = pathlib.Path("MEMORY.md")
+max_sprint_id = 0
+if mem.exists():
+    for line in mem.read_text().splitlines():
+        if line.startswith("## Max sprint ID:"):
+            try: max_sprint_id = int(line.split(":")[-1].strip())
+            except: pass
+            break
+# Also scan planner-spec.json in case MEMORY.md lags
+spec_path = pathlib.Path("planner-spec.json")
+if spec_path.exists():
+    spec = json.loads(spec_path.read_text())
+    for s in spec.get("sprints", []):
+        try: max_sprint_id = max(max_sprint_id, int(s["id"]))
+        except: pass
+
+print(f"SESSION_CURRENT_VERSION={current_version}")
+print(f"SESSION_MAX_SPRINT_ID={max_sprint_id}")
+print(f"SESSION_NEXT_SPRINT_ID={max_sprint_id + 1}")
+PY
+```
+
+Store these values mentally as `SESSION_CURRENT_VERSION`, `SESSION_MAX_SPRINT_ID`, and `SESSION_NEXT_SPRINT_ID`. Use them for all sprint ID assignments and version baseline reads in this session.
 
 ### Branch reconciliation
 
@@ -121,25 +168,53 @@ for p in paths:
     txt = p.read_text(errors="ignore")
     (passed if "SPRINT PASS" in txt else failed if "SPRINT FAIL" in txt else passed).add(int(sid))
 
-declared = int(run_state.get("last_successful_sprint", 0) or 0)
-findings = []
+declared  = int(run_state.get("last_successful_sprint", 0) or 0)
+max_passed = max(passed) if passed else 0
+
+blocking_findings = []   # cause needs_human=true
+info_findings     = []   # informational only — historical gaps, do not block
+
+# run-state claims a sprint passed that has no eval result → blocking
 if declared > 0 and declared not in passed:
-    findings.append(f"run-state claims last_successful_sprint={declared} "
-                    f"but .sprintfoundry/eval-results/eval-result-{declared}.md lacks SPRINT PASS")
+    blocking_findings.append(
+        f"run-state claims last_successful_sprint={declared} "
+        f"but eval-result-{declared}.md lacks SPRINT PASS"
+    )
+
 for s in sorted(int(x["id"]) for x in spec.get("sprints", []) if not x.get("skipped")):
-    if s < declared and s not in passed:
-        kind = "fail_bypassed" if s in failed else "evaluator_skipped"
-        findings.append(f"[{kind}] Sprint {s}: no SPRINT PASS recorded")
-if findings:
-    print("AUDIT FAILED:")
-    for f in findings: print(" -", f)
+    if s in passed:
+        continue
+    if s > max_passed:
+        # Not yet reached — normal pending sprint, not an audit issue
+        continue
+    # s < max_passed and s not in passed → historical gap
+    # A later sprint already passed, meaning someone manually advanced past this sprint.
+    # This is not a blocker — record as informational so the user is aware.
+    kind = "fail_bypassed" if s in failed else "evaluator_skipped"
+    info_findings.append(
+        f"[historical-gap/{kind}] Sprint {s}: no SPRINT PASS recorded "
+        f"(later sprints up to {max_passed} have passed — this gap will NOT block routing)"
+    )
+
+if blocking_findings:
+    print("AUDIT FAILED (will pause):")
+    for f in blocking_findings: print(" -", f)
+    if info_findings:
+        print("Also noted (historical gaps, non-blocking):")
+        for f in info_findings: print("   ~", f)
     sys.exit(1)
 else:
-    print("Audit OK")
+    if info_findings:
+        print("Audit OK (with historical gaps noted):")
+        for f in info_findings: print("   ~", f)
+    else:
+        print("Audit OK")
 PY
 ```
 
-If audit fails: set `run-state.json` → `mode="paused"`, `needs_human=true`. **Stop routing.**
+If audit fails (blocking findings): set `run-state.json` → `mode="paused"`, `needs_human=true`. **Stop routing.**
+
+Historical gaps (informational findings) do **not** pause routing. They are noted to the user but the harness continues from the sprint after `max(passed)`.
 
 ---
 
@@ -239,6 +314,9 @@ ELSE
 ```
 → Update run-state.json: sprint_origin="bugfix"
   Codex: "Read planner-spec.json and bug-report.md. Propose sprint-contract.md for a bugfix sprint.
+          Add the new sprint entry to planner-spec.json with
+            id = max(all existing sprint IDs in planner-spec.json) + 1
+          (do NOT use any gap ID or reuse an existing ID).
           Limit scope to the reported regression. Stop after writing the file."
 ```
 
@@ -255,7 +333,9 @@ Read `references/version-updates.md` for full step-by-step details on each path.
 → Update run-state.json: sprint_origin="bugfix"
   Codex: "Read planner-spec.json and change-request.md.
           Propose sprint-contract.md for a bugfix sprint.
-          Add the new sprint entry to planner-spec.json (next available ID).
+          Add the new sprint entry to planner-spec.json with
+            id = max(all existing sprint IDs in planner-spec.json) + 1
+          (do NOT use any gap ID or reuse an existing ID).
           Delete change-request.md after writing the contract.
           Limit scope strictly to the reported defect. Stop after writing the file."
 → Resume at Rule 3 (contract review).
@@ -266,7 +346,9 @@ A bounded iteration — scope fits in one sprint, no spec restructuring needed.
 ```
 → Update run-state.json: sprint_origin="minor_feature"
   Codex: "Read planner-spec.json and change-request.md.
-          Add a new sprint entry to planner-spec.json for this feature (next available ID).
+          Add a new sprint entry to planner-spec.json for this feature with
+            id = max(all existing sprint IDs in planner-spec.json) + 1
+          (do NOT use any gap ID or reuse an existing ID).
           Propose sprint-contract.md for that sprint.
           Delete change-request.md after writing the contract.
           Stop after writing the file."
@@ -280,8 +362,9 @@ Scope requires new sprints to be added to the product plan before coding begins.
 2. Update run-state.json: sprint_origin="major_feature"
 3. → Agent(subagent_type="planner",
            prompt="Read planner-spec.json and change-request.md.
-                   Add new sprints for the requested major feature (next available IDs).
-                   Do NOT renumber or remove existing sprint IDs.
+                   Add new sprints for the requested major feature.
+                   Each new sprint must use id = max(all existing sprint IDs) + 1, +2, etc.
+                   Do NOT renumber or remove existing sprint IDs. Do NOT fill in gap IDs.
                    Delete change-request.md after updating the spec.
                    Stop after writing planner-spec.json.")
 4. After Planner completes → resume at Rule 6 (next unfinished sprint).
@@ -297,7 +380,7 @@ Full product direction change — Planner substantially rewrites the spec.
                    Revise planner-spec.json for the new direction.
                    Preserve all existing sprint IDs that have SPRINT PASS eval-results —
                    mark the rest as skipped: true if they are no longer needed.
-                   New sprints must use IDs higher than the highest existing sprint ID.
+                   New sprints must use id = max(all existing sprint IDs) + 1, +2, etc. — never gap IDs.
                    Delete change-request.md after writing the updated spec.
                    Stop after writing planner-spec.json.")
 4. After Planner completes → run sprint history audit → resume at Rule 6.
@@ -310,9 +393,23 @@ Full product direction change — Planner substantially rewrites the spec.
 ```
 
 ### Rule 6 — Ready for next sprint
+
+```python
+# Determine next sprint N to work on:
+#   1. Collect all sprint IDs that have SPRINT PASS eval results → passed set
+#   2. max_passed = max(passed) if passed else 0
+#   3. Candidates = sprint IDs in planner-spec.json (not skipped) with no SPRINT PASS
+#                   AND id > max_passed  (skip historical gaps — already handled)
+#   4. N = min(candidates)  — lowest pending sprint after the last confirmed pass
+#   5. If candidates is empty → Rule 7 (all done)
+#
+# Note: new sprints added by Rules 4/5 are always assigned
+#       ID = SESSION_MAX_SPRINT_ID + 1 (computed during startup).
+#       They will be > max_passed and therefore always land in candidates.
 ```
-Find N = lowest sprint ID in planner-spec.json with no "SPRINT PASS" eval result
-under `.sprintfoundry/eval-results/` (legacy root files may be read during migration).
+
+```
+Find N using the algorithm above.
 IF all sprints have SPRINT PASS → Rule 7
 ELSE
   Before invoking Codex, create/switch sprint branch:
@@ -379,7 +476,23 @@ import json, pathlib, re, subprocess, sys
 rs_path = pathlib.Path("run-state.json")
 run_state = json.loads(rs_path.read_text()) if rs_path.exists() else {}
 origin = run_state.get("sprint_origin", "feature")
-current = run_state.get("current_version", "0.0.0")
+
+# VERSION file is the primary machine-readable version source — never trust
+# run-state.json alone. MEMORY.md is a recovery fallback if VERSION is missing.
+# run-state.json.current_version can drift when re-processing historical sprints.
+version_file = pathlib.Path("VERSION")
+if version_file.exists():
+    current = version_file.read_text().strip().lstrip("v") or "0.0.0"
+else:
+    current = "0.0.0"
+    mem = pathlib.Path("MEMORY.md")
+    if mem.exists():
+        for line in reversed(mem.read_text().splitlines()):
+            if line.startswith("## Latest version:"):
+                current = line.split(":")[-1].strip().lstrip("v") or "0.0.0"
+                break
+    if current == "0.0.0":
+        current = str(run_state.get("current_version", "0.0.0")).strip().lstrip("v") or "0.0.0"
 contract = pathlib.Path("sprint-contract.md").read_text(errors="ignore") \
            if pathlib.Path("sprint-contract.md").exists() else ""
 eval_glob = sorted([
@@ -387,6 +500,17 @@ eval_glob = sorted([
     *pathlib.Path(".").glob("eval-result-*.md"),
 ], key=lambda p: int(re.search(r"\d+", p.stem).group()))
 eval_text = eval_glob[-1].read_text(errors="ignore") if eval_glob else ""
+
+sprint_n = str(run_state.get("current_sprint", "?"))
+mem_path = pathlib.Path("MEMORY.md")
+if mem_path.exists() and sprint_n.isdigit():
+    for line in mem_path.read_text().splitlines():
+        if not line.startswith("|") or line.startswith("| Sprint") or set(line.strip()) <= {"|", "-"}:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) > 3 and parts[1] == sprint_n and parts[3] == "PASS":
+            print(f"MEMORY.md already records Sprint {sprint_n} PASS; release bump is idempotent no-op.")
+            sys.exit(0)
 
 major, minor, patch = map(int, current.split("."))
 
@@ -406,10 +530,23 @@ else:
     bump = "minor"; minor += 1; patch = 0
 
 new_version = f"{major}.{minor}.{patch}"
+
+# Safety guard: new version must never be less than (or equal to) what VERSION already has.
+# This prevents rollback when re-processing a historical gap sprint.
+def _v(s):
+    try: return tuple(int(x) for x in s.split("."))
+    except: return (0, 0, 0)
+if _v(new_version) <= _v(current):
+    # Force a patch bump on top of current instead
+    cm, cn, cp = map(int, current.split("."))
+    cp += 1
+    new_version = f"{cm}.{cn}.{cp}"
+    bump = "patch(guard)"
+    major, minor, patch = cm, cn, cp
+
 pathlib.Path("VERSION").write_text(new_version + "\n")
 
 # Append to CHANGELOG.md
-sprint_n = run_state.get("current_sprint", "?")
 entry = f"\n## v{new_version} — Sprint {sprint_n} [{bump.upper()} bump]\n"
 for obs in re.findall(r"Observation: (.+)", eval_text):
     entry += f"- {obs.strip()}\n"
@@ -418,14 +555,47 @@ with open("CHANGELOG.md", "a") as f:
 
 print(f"Version bump: {current} → {new_version}  ({bump})")
 print(f"VERSION and CHANGELOG.md updated.")
+
+# Append to MEMORY.md sprint ledger
+title_match = re.search(r"^#+\s+Sprint\s+\d+[:\s—-]+(.+)", contract, re.MULTILINE)
+sprint_title = title_match.group(1).strip()[:60] if title_match else "—"
+import datetime
+today = datetime.date.today().isoformat()
+if not mem_path.exists():
+    mem_path.write_text(
+        "# SprintFoundry Sprint Ledger\n"
+        "<!-- ledger rows are append-only; footer metadata may be regenerated by Orchestrator -->\n\n"
+        "| Sprint | Title | Status | Version | Date | Origin |\n"
+        "|--------|-------|--------|---------|------|--------|\n"
+    )
+mem_lines = mem_path.read_text().splitlines()
+# Remove old footer lines before appending
+mem_lines = [l for l in mem_lines if not l.startswith("## Latest version:") and not l.startswith("## Max sprint ID:")]
+# Append new row
+mem_lines.append(f"| {sprint_n} | {sprint_title} | PASS | v{new_version} | {today} | {origin} |")
+# Compute max_sprint_id from all rows
+max_id = 0
+for l in mem_lines:
+    if l.startswith("|") and not l.startswith("| Sprint"):
+        parts = [p.strip() for p in l.split("|")]
+        if len(parts) > 1 and parts[1].isdigit():
+            max_id = max(max_id, int(parts[1]))
+mem_lines.append(f"\n## Latest version: v{new_version}")
+mem_lines.append(f"## Max sprint ID: {max_id}")
+mem_path.write_text("\n".join(mem_lines) + "\n")
+print(f"MEMORY.md updated — sprint {sprint_n} PASS recorded.")
 PY
 ```
 
 After the script runs, Orchestrator commits and tags:
 
+If the script prints `release bump is idempotent no-op`, skip the release
+commit/tag step and proceed with normal sprint cleanup; the sprint was already
+recorded in `MEMORY.md`.
+
 ```bash
 NEW_VERSION=$(cat VERSION)
-git add VERSION CHANGELOG.md
+git add VERSION CHANGELOG.md MEMORY.md
 git commit -m "chore(release): bump to v${NEW_VERSION} after Sprint N PASS"
 git tag -a "v${NEW_VERSION}" -m "v${NEW_VERSION}"
 # push tag if remote is configured
@@ -492,6 +662,76 @@ codex exec --full-auto \
 
 > **Note**: If `scripts/orchestrate.py` exists, use its emitted command instead:
 > `python3 scripts/orchestrate.py --project-dir . --json`
+
+---
+
+## MEMORY.md — Sprint Ledger
+
+`MEMORY.md` is the **ledger for sprint history and recovery metadata**. It survives context resets, session restarts, and run-state.json drift.
+
+- Ledger rows are append-only.
+- Footer metadata (`## Latest version:` and `## Max sprint ID:`) may be regenerated by the Orchestrator.
+- `VERSION` is the primary machine-readable current version source; `MEMORY.md` is the fallback recovery source if `VERSION` is missing.
+
+### Format
+
+```markdown
+# SprintFoundry Sprint Ledger
+<!-- ledger rows are append-only; footer metadata may be regenerated by Orchestrator -->
+
+| Sprint | Title | Status | Version | Date | Origin |
+|--------|-------|--------|---------|------|--------|
+| 1  | Initial scaffold          | PASS | v0.1.0  | 2026-01-15 | feature       |
+| 2  | Auth endpoints            | PASS | v0.2.0  | 2026-01-20 | feature       |
+| 11 | Fix login race condition  | PASS | v0.20.0 | 2026-03-01 | bugfix        |
+
+## Latest version: v0.20.0
+## Max sprint ID: 11
+```
+
+### Rules
+
+- **Orchestrator writes** one ledger row per `SPRINT PASS` immediately after the version bump script runs.
+- **Never edit ledger rows manually** — treat rows like an audit log.
+- **`## Latest version:`** is regenerated metadata and should match the highest version ever reached (version bump guard ensures this).
+- **`## Max sprint ID:`** is `max(all sprint IDs in table)` — used to compute `SESSION_NEXT_SPRINT_ID` at startup.
+- If the file doesn't exist, the version bump script initialises it automatically.
+- If the current sprint already has a `PASS` row, the version bump script exits as an idempotent no-op to prevent duplicate release bumps after an interrupted run.
+- Historical gap sprints (e.g., Sprint 11 that was fixed retroactively) appear in chronological write order, not ID order. That is fine.
+
+### Initialising in an existing project
+
+If you have an existing project with no `MEMORY.md`, create it by hand after reading `planner-spec.json` and all `eval-result-*.md` files:
+
+```bash
+python3 - <<'PY'
+import json, pathlib, re, datetime
+
+spec   = json.loads(pathlib.Path("planner-spec.json").read_text())
+header = ("# SprintFoundry Sprint Ledger\n"
+          "<!-- append-only — do not edit manually -->\n\n"
+          "| Sprint | Title | Status | Version | Date | Origin |\n"
+          "|--------|-------|--------|---------|------|--------|\n")
+rows = []
+max_id = 0
+for s in sorted(spec.get("sprints", []), key=lambda x: int(x["id"])):
+    sid   = int(s["id"])
+    title = s.get("title", "—")[:60]
+    pat   = re.compile(rf"eval-result-{sid}\.md$")
+    eval_files = [*pathlib.Path(".").glob(f".sprintfoundry/eval-results/eval-result-{sid}.md"),
+                  *pathlib.Path(".").glob(f"eval-result-{sid}.md")]
+    status = "—"
+    if eval_files:
+        txt = eval_files[0].read_text(errors="ignore")
+        status = "PASS" if "SPRINT PASS" in txt else ("FAIL" if "SPRINT FAIL" in txt else "—")
+    rows.append(f"| {sid} | {title} | {status} | — | — | — |")
+    max_id = max(max_id, sid)
+pathlib.Path("MEMORY.md").write_text(
+    header + "\n".join(rows) + f"\n\n## Latest version: v{pathlib.Path('VERSION').read_text().strip() if pathlib.Path('VERSION').exists() else '0.0.0'}\n## Max sprint ID: {max_id}\n"
+)
+print("MEMORY.md initialised.")
+PY
+```
 
 ---
 
