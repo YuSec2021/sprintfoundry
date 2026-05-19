@@ -255,3 +255,8 @@ zipinfo -1 sprintfoundry.plugin
 - 检查或恢复已暂停的无人值守状态
 
 该 skill 会读取当前 artifacts，选择下一步路由，并调用对应的 Planner、Codex Generator 或 Evaluator 路径。
+
+SprintFoundry 会在启动时解析明确的 `SPRINTFOUNDRY_PROJECT_ROOT`，所有
+Bash、Codex、Planner、Evaluator 工作都从这个项目根目录执行。plugin cache
+目录永远不会被当成项目目录，因此多个项目可以同时运行该 plugin，而不会共享
+harness 状态。

@@ -255,3 +255,8 @@ After installing the plugin, invoke `sprintfoundry-orchestrator` from Claude Cod
 - inspect or recover paused unattended state
 
 The skill will read current artifacts, choose the next route, and call the appropriate Planner, Codex Generator, or Evaluator path.
+
+SprintFoundry resolves an explicit `SPRINTFOUNDRY_PROJECT_ROOT` at startup and
+runs all Bash, Codex, Planner, and Evaluator work from that root. The plugin
+cache directory is never treated as the project directory, so multiple projects
+can run the plugin concurrently without sharing harness state.

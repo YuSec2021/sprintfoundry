@@ -27,6 +27,110 @@ You never write application code. You never evaluate sprint quality.
 
 ---
 
+## Project-root isolation — mandatory
+
+The plugin installation directory is **not** the project directory. When this
+skill is loaded from a plugin cache, its base directory may look like:
+
+```text
+~/.claude-minimax/plugins/cache/sprintfoundry/...
+```
+
+Never read or write harness artifacts relative to that cache directory. Every
+operation must be anchored to one explicit target project root.
+
+### Resolve target project root before any routing
+
+At the start of every invocation, determine `SPRINTFOUNDRY_PROJECT_ROOT`:
+
+1. If the user gave an explicit project path, use that.
+2. Else use the current conversation/task working directory if it is inside a
+   Git worktree or contains project artifacts such as `planner-spec.json`,
+   `run-state.json`, `MEMORY.md`, `.sprintfoundry/`, `AGENTS.md`, or `.git/`.
+3. Else ask the user for the target project path and stop.
+
+Use this resolver:
+
+```bash
+python3 - <<'PY'
+import os, pathlib, subprocess, sys
+
+raw = os.environ.get("SPRINTFOUNDRY_PROJECT_ROOT") or os.environ.get("PWD") or os.getcwd()
+candidate = pathlib.Path(raw).expanduser().resolve()
+
+cache_markers = (
+    "/plugins/cache/sprintfoundry/",
+    "/.claude-minimax/plugins/cache/",
+    "/.claude/plugins/cache/",
+)
+if any(marker in str(candidate) for marker in cache_markers):
+    print("ERROR: resolved path is the SprintFoundry plugin cache, not a project.")
+    print("Ask the user for the target project directory and stop.")
+    sys.exit(2)
+
+def git_root(path: pathlib.Path) -> pathlib.Path | None:
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    return pathlib.Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
+
+root = git_root(candidate)
+if root is None:
+    markers = ("planner-spec.json", "run-state.json", "MEMORY.md", ".sprintfoundry", "AGENTS.md", ".git")
+    probe = candidate
+    while True:
+        if any((probe / marker).exists() for marker in markers):
+            root = probe
+            break
+        if probe.parent == probe:
+            break
+        probe = probe.parent
+
+if root is None:
+    print(f"ERROR: could not resolve project root from {candidate}")
+    print("Ask the user for the target project directory and stop.")
+    sys.exit(2)
+
+state_dir = root / ".sprintfoundry"
+state_dir.mkdir(exist_ok=True)
+(state_dir / "project-root").write_text(str(root) + "\n")
+print(f"SPRINTFOUNDRY_PROJECT_ROOT={root}")
+PY
+```
+
+Store the printed path mentally as `SPRINTFOUNDRY_PROJECT_ROOT`.
+
+### Isolation rules
+
+- Prefix every Bash command with:
+  ```bash
+  cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
+  ```
+- Pass `SPRINTFOUNDRY_PROJECT_ROOT` explicitly in every Planner/Evaluator
+  sub-agent prompt. Tell the sub-agent to run `cd "<project root>"` before any
+  `Read`, `Write`, or `Bash` work and to stop if `pwd` is different.
+- Invoke Codex only from the target project:
+  ```bash
+  cd "$SPRINTFOUNDRY_PROJECT_ROOT" && codex exec ...
+  ```
+- If the active task notification/worktree path and
+  `SPRINTFOUNDRY_PROJECT_ROOT` disagree, stop and surface the mismatch. Do not
+  "helpfully" continue in the most recent project.
+- Store runtime state only under the target project (`.sprintfoundry/`,
+  `run-state.json`, `MEMORY.md`, `planner-spec.json`, etc.).
+
+This is what allows two independent projects to use SprintFoundry at the same
+time without sharing state through the plugin cache directory or a stale agent
+session.
+
+---
+
 ## Agent reference files
 
 Load these from `references/` when you need deep details:
@@ -45,6 +149,7 @@ Load these from `references/` when you need deep details:
 ## Session startup — run every time before doing anything else
 
 ```bash
+cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
 cat VERSION             2>/dev/null || echo "[no VERSION]"
 cat MEMORY.md           2>/dev/null | tail -15 || echo "[no MEMORY.md]"
 cat run-state.json      2>/dev/null || echo "[no run-state]"
@@ -102,6 +207,9 @@ PY
 ```
 
 Store these values mentally as `SESSION_CURRENT_VERSION`, `SESSION_MAX_SPRINT_ID`, and `SESSION_NEXT_SPRINT_ID`. Use them for all sprint ID assignments and version baseline reads in this session.
+
+All remaining shell snippets in this skill assume you have already run
+`cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2` in that shell.
 
 ### Branch reconciliation
 
@@ -226,7 +334,11 @@ Historical gaps (informational findings) do **not** pause routing. They are note
 ### Rule 1 — No planner-spec.json
 ```
 → Agent(subagent_type="planner",
-        prompt="New project: {user_prompt}. Write planner-spec.json, init.sh, and initial claude-progress.txt.")
+        prompt="Project root: {SPRINTFOUNDRY_PROJECT_ROOT}
+                First run: cd {SPRINTFOUNDRY_PROJECT_ROOT}
+                Stop if pwd is not this project root.
+                New project: {user_prompt}. Write planner-spec.json, init.sh,
+                and initial claude-progress.txt in this project only.")
 ```
 Read `references/planner-agent.md` first.
 
@@ -274,7 +386,10 @@ Run quality gate script (bash, ~30 seconds):
 IF quality-gate-N.md Verdict is PASS
   → Update run-state.json: quality_retry_count=0
   → Agent(subagent_type="evaluator",
-          prompt="Run CHECK for Sprint N. Read sprint-contract.md, eval-trigger.txt,
+          prompt="Project root: {SPRINTFOUNDRY_PROJECT_ROOT}
+                  First run: cd {SPRINTFOUNDRY_PROJECT_ROOT}
+                  Stop if pwd is not this project root.
+                  Run CHECK for Sprint N. Read sprint-contract.md, eval-trigger.txt,
                   and quality-gate-N.md. Use quality-gate-N.md for Craft scoring.")
     Read references/evaluator-agent.md first.
 
@@ -307,7 +422,10 @@ IF sprint-contract.md tail contains "^---\nCONTRACT APPROVED"
   → Codex implementation (see commands below)
 ELSE
   → Agent(subagent_type="evaluator",
-          prompt="Review sprint-contract.md. Approve or return required changes.")
+          prompt="Project root: {SPRINTFOUNDRY_PROJECT_ROOT}
+                  First run: cd {SPRINTFOUNDRY_PROJECT_ROOT}
+                  Stop if pwd is not this project root.
+                  Review sprint-contract.md. Approve or return required changes.")
 ```
 
 ### Rule 4 — bug-report.md exists
@@ -361,7 +479,10 @@ Scope requires new sprints to be added to the product plan before coding begins.
 1. Read references/planner-agent.md.
 2. Update run-state.json: sprint_origin="major_feature"
 3. → Agent(subagent_type="planner",
-           prompt="Read planner-spec.json and change-request.md.
+           prompt="Project root: {SPRINTFOUNDRY_PROJECT_ROOT}
+                   First run: cd {SPRINTFOUNDRY_PROJECT_ROOT}
+                   Stop if pwd is not this project root.
+                   Read planner-spec.json and change-request.md.
                    Add new sprints for the requested major feature.
                    Each new sprint must use id = max(all existing sprint IDs) + 1, +2, etc.
                    Do NOT renumber or remove existing sprint IDs. Do NOT fill in gap IDs.
@@ -376,7 +497,10 @@ Full product direction change — Planner substantially rewrites the spec.
 1. Read references/version-updates.md (replan section) before proceeding.
 2. Update run-state.json: sprint_origin="replan"
 3. → Agent(subagent_type="planner",
-           prompt="Read planner-spec.json and change-request.md.
+           prompt="Project root: {SPRINTFOUNDRY_PROJECT_ROOT}
+                   First run: cd {SPRINTFOUNDRY_PROJECT_ROOT}
+                   Stop if pwd is not this project root.
+                   Read planner-spec.json and change-request.md.
                    Revise planner-spec.json for the new direction.
                    Preserve all existing sprint IDs that have SPRINT PASS eval-results —
                    mark the rest as skipped: true if they are no longer needed.
@@ -629,9 +753,11 @@ If a `major_feature` or `replan` change contradicts an already-passed sprint's c
 ## Codex CLI invocation commands
 
 Use these exact flags. Always `--skip-git-repo-check`.
+Run them from the target project root, never from the plugin cache directory.
 
 ```bash
 # Propose sprint contract
+cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
 codex exec --full-auto \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
@@ -640,6 +766,7 @@ codex exec --full-auto \
    Follow AGENTS.md Generator rules. Stop after writing the file."
 
 # Implement after contract approved
+cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
 codex exec --full-auto \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
@@ -649,6 +776,7 @@ codex exec --full-auto \
    STOP IMMEDIATELY after writing eval-trigger.txt. Follow AGENTS.md."
 
 # Fix after SPRINT FAIL (inline the eval result body before running)
+cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
 codex exec --full-auto \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
@@ -661,7 +789,7 @@ codex exec --full-auto \
 ```
 
 > **Note**: If `scripts/orchestrate.py` exists, use its emitted command instead:
-> `python3 scripts/orchestrate.py --project-dir . --json`
+> `python3 scripts/orchestrate.py --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --json`
 
 ---
 
@@ -790,14 +918,17 @@ Never infer state from conversation history alone.
 - Never invoke `Agent(subagent_type="generator")` — Generator is always Codex via Bash.
 - Never advance the sprint counter without a `SPRINT PASS` in `.sprintfoundry/eval-results/eval-result-N.md`.
 - Never rewrite `harness-audit.ndjson` — it is append-only.
+- Never operate from the plugin cache/base directory. Resolve
+  `SPRINTFOUNDRY_PROJECT_ROOT` first, `cd` there, and stop on any project-root
+  mismatch.
 
 ---
 
 ## Useful harness scripts (if present in project)
 
 ```bash
-python3 scripts/orchestrate.py --project-dir . --json          # full orchestration step
-python3 scripts/orchestrate.py --project-dir . --check-only --json  # side-effect-free status
+python3 scripts/orchestrate.py --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --json
+python3 scripts/orchestrate.py --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --check-only --json
 python3 scripts/harness-log.py verify                          # reconcile state vs eval-results
 python3 scripts/harness-log.py tail -n 30                      # last 30 audit events
 bash scripts/install-hooks.sh                                  # install git hooks
