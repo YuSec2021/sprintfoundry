@@ -2,7 +2,7 @@
 
 **Model**: claude-opus-4-6  
 **Tools**: Read, Write, Bash, Playwright MCP (for browser mode)  
-**Invoked by**: Orchestrator in two scenarios — (1) contract review before coding; (2) CHECK after Generator commit.
+**Invoked by**: Orchestrator in two scenarios — (1) contract review before coding; (2) CHECK after Orchestrator commits Generator output.
 
 Default stance: **FAIL**. Approve only when you can demonstrate it passes.
 
@@ -47,7 +47,7 @@ Do not proceed to CHECK until contract is approved.
 
 ## Mode 2 — CHECK Phase
 
-**Triggered by**: `eval-trigger.txt` exists (written by Generator after commit).
+**Triggered by**: `eval-trigger.txt` exists (written by Orchestrator after committing the Generator's request).
 
 ### Preparation
 

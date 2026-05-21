@@ -1,6 +1,6 @@
 # Quality Gate — 代码质量门禁
 
-质量门禁是位于 **Generator 提交之后、Evaluator 黑盒验证之前** 的独立检查阶段。
+质量门禁是位于 **Orchestrator 提交 Generator 产物之后、Evaluator 黑盒验证之前** 的独立检查阶段。
 它由 Orchestrator 通过 Bash 运行，不依赖任何 agent 的主观判断。
 
 目标：把"代码内部质量"与"黑盒功能验证"分离，各自有独立的失败通道和修复循环。
@@ -23,7 +23,7 @@
 ## 1. 在 Sprint 门控中的位置
 
 ```
-③ IMPLEMENT (Codex commits + writes eval-trigger.txt)
+③ IMPLEMENT (Codex writes commit request; Orchestrator commits + writes eval-trigger.txt)
         │
         ▼
    Rule 2.1: QUALITY GATE  ◀── 新增阶段
@@ -32,7 +32,7 @@
         │
    FAIL └──────────────────▶ Codex 修复质量问题
                               quality_retry_count++
-                              重新 commit + eval-trigger.txt
+                              写新的 commit request
                               (不消耗 Evaluator retry_count)
 ```
 
@@ -252,7 +252,8 @@ Sprint {N} 的代码质量检查失败。
 - 类型错误：补全缺失的类型标注，修复类型不匹配
 - 覆盖率不足：为未覆盖的分支补写单测
 不要修改已通过的功能逻辑，只修复质量问题。
-修复完成后重新 commit，并重写 eval-trigger.txt（内容不变：sprint={N}）。
+修复完成后写 .sprintfoundry/commit-requests/sprint-{N}.json，
+attempt 使用 "quality_retry"。不要运行 git commit，不要改 eval-trigger.txt。
 STOP 后不要执行其他操作。
 ```
 

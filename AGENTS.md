@@ -9,7 +9,7 @@ short and operational. Full background lives in `docs/protocol.md`.
 | --- | --- | --- |
 | Orchestrator | **Plugin skill** `sprintfoundry-orchestrator` | Routes by file state; entry point for all user requests. |
 | Planner | Claude sub-agent | Writes `planner-spec.json`, `init.sh`, and initial `claude-progress.txt`. |
-| Generator | Codex CLI | Implements exactly one approved sprint, commits, writes `eval-trigger.txt`. |
+| Generator | Codex CLI | Implements exactly one approved sprint and writes a commit request. |
 | Evaluator | Claude sub-agent | Reviews contracts and runs independent black-box CHECK. |
 
 The Orchestrator is now a **skill** (not an agent) — the entry point that users trigger.
@@ -18,6 +18,9 @@ Generator is always Codex CLI via Bash — never a Claude sub-agent.
 
 The gate rule: Generator never writes `SPRINT PASS` or `SPRINT FAIL`. Only the
 Evaluator writes `.sprintfoundry/eval-results/eval-result-{N}.md`.
+Git rule: Generator never writes Git metadata, commits, or `eval-trigger.txt`.
+The Orchestrator owns `git add`, `git commit`, and trigger creation after it
+validates the Generator's commit request.
 
 > **Plugin source**: `plugin/` directory. Build: `bash scripts/package_plugin.sh`
 > **Example files**: `examples/` directory (run-state, planner-spec, sprint-contract, etc.)
@@ -31,7 +34,8 @@ State lives on disk, not in chat memory.
 | `planner-spec.json` | Planner | Product spec, sprint list, tech stack, verification mode. |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done. Must be approved before code. |
 | `sprint-fence.json` | Orchestrator | Authorized sprint number and base commit. |
-| `eval-trigger.txt` | Generator | Signal after commit. Must contain exactly `sprint=N`. |
+| `.sprintfoundry/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation. |
+| `eval-trigger.txt` | Orchestrator | Signal after Orchestrator commit. Must contain exactly `sprint=N` or `sprint=N-retry`. |
 | `.sprintfoundry/eval-results/eval-result-{N}.md` | Evaluator | Authoritative sprint verdict kept out of the project root. |
 | `run-state.json` | Orchestrator | Cache: mode, retry count, pause state, branch state. |
 | `claude-progress.txt` | Generator | Compact handoff, not a transcript. |
@@ -80,6 +84,7 @@ Route strictly by current files:
 - `change-request.md` -> route by `Type: bugfix | minor_feature | major_feature | replan`.
 - Unapproved `sprint-contract.md` -> Evaluator contract review.
 - Approved `sprint-contract.md` with no trigger -> prepare sprint branch, write fence, invoke Codex.
+- `.sprintfoundry/commit-requests/sprint-{N}.json` -> Orchestrator validates, commits, writes `eval-trigger.txt`.
 - `eval-trigger.txt` -> Evaluator CHECK unless a stale FAIL requires retry routing.
 - SPRINT PASS -> cleanup trigger, contract, and fence before the next sprint.
 
@@ -108,7 +113,7 @@ Do not treat old chat context as truth.
 
 ## Branch Rules
 
-- Implementation commits must be on the current sprint branch, not `main`.
+- Orchestrator commits implementation changes on the current sprint branch, not `main`.
 - Preferred branch: `codex/sprint-<N>-<short-slug>`.
 - Retries stay on the same sprint branch.
 - A new sprint gets a new branch.
@@ -156,8 +161,8 @@ Before editing code:
 sha256sum sprint-contract.md > sprint-contract.md.sha256
 ```
 
-If the contract changes after this point, stop and surface it. Do not commit
-against a modified contract.
+If the contract changes after this point, stop and surface it. Do not request a
+commit against a modified contract.
 
 Implementation rules:
 
@@ -169,7 +174,7 @@ Implementation rules:
 - Prefer deleting weak code over wrapping it in new layers.
 - Avoid placeholder architecture, fake extensibility, and opportunistic refactors.
 
-Self-check before commit:
+Self-check before requesting a commit:
 
 ```bash
 pytest -q
@@ -178,21 +183,23 @@ git diff --stat
 
 Also remove debug output, dead code, temporary files, and duplicated logic.
 
-Commit:
+Prepare a commit request. Do not run `git add`, `git commit`, or write
+`eval-trigger.txt` from Codex:
 
-```bash
-git add -A
-git commit -m "feat(sprint-<N>): <imperative description>"
+```json
+{
+  "sprint": N,
+  "attempt": "initial",
+  "contract_sha256": "<sha256 from sprint-contract.md.sha256>",
+  "commit_message": "feat(sprint-<N>): <imperative description>",
+  "changed_files": ["<relative paths>"],
+  "tests": [{"command": "pytest -q", "status": "passed"}]
+}
 ```
 
-Then signal Evaluator:
-
-```bash
-echo "sprint=<N>" > eval-trigger.txt
-```
-
-Update `claude-progress.txt` compactly after writing the trigger. Stop
-immediately after this. Do not inspect or start the next sprint.
+Write it to `.sprintfoundry/commit-requests/sprint-<N>.json`, update
+`claude-progress.txt` compactly, then stop. The Orchestrator will commit and
+write `eval-trigger.txt` after validation.
 
 ## Retry Phase
 
@@ -202,14 +209,18 @@ When invoked after SPRINT FAIL:
 - Do not depend on `.sprintfoundry/eval-results/eval-result-{N}.md` being present; Orchestrator may have
   inlined it into the prompt and deleted the file.
 - Keep the retry on the same sprint branch.
-- Commit with:
+- Write a retry commit request with:
 
-```bash
-git commit -m "fix(sprint-<N>): address evaluator failure"
-echo "sprint=<N>" > eval-trigger.txt
+```json
+{
+  "sprint": N,
+  "attempt": "retry",
+  "commit_message": "fix(sprint-<N>): address evaluator failure"
+}
 ```
 
-Then update `claude-progress.txt` compactly and stop.
+Then update `claude-progress.txt` compactly and stop. The Orchestrator commits
+and writes `eval-trigger.txt` with `sprint=N-retry`.
 
 ## Progress Log Policy
 
@@ -239,6 +250,7 @@ Stop and surface to Orchestrator/human when:
 - Never code before `CONTRACT APPROVED`.
 - Never self-evaluate or write `.sprintfoundry/eval-results/eval-result-{N}.md`.
 - Never write `SPRINT PASS` or `SPRINT FAIL`.
+- Never run `git add`, `git commit`, or write `eval-trigger.txt`.
 - Never write to `run-state.json`.
 - Never implement multiple sprints in one Codex session.
 - Never start a new sprint on the previous sprint branch.

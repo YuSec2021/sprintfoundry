@@ -145,8 +145,8 @@ def codex_command(prompt: str) -> str:
     version = codex_version_tuple()
     if version is not None and version >= CODEX_EXEC_MODERN_MIN_VERSION:
         # --full-auto = --sandbox workspace-write (writes restricted to workspace).
-        # disk-full-read-access lets git read ~/.gitconfig and ~/.ssh so commits work.
-        # shell_environment_policy.inherit=all passes GIT_* env vars through the sandbox.
+        # Codex writes project files only; Orchestrator owns Git metadata.
+        # shell_environment_policy.inherit=all keeps project-root/env hints available.
         return (
             "codex exec --full-auto"
             " -c 'sandbox_permissions=[\"disk-full-read-access\"]'"
@@ -178,7 +178,7 @@ class RouteDecision:
     cleanup_contract: bool = False
     # When True, eval-result-{current_sprint}.md is deleted *before* Codex runs
     # its retry. Without this the orchestrator loops on the stale FAIL verdict:
-    # Codex rewriting eval-trigger.txt with the same sprint number leaves the
+    # a retry handoff that preserves eval-trigger.txt on the same sprint leaves the
     # file system indistinguishable from the pre-retry state, so every
     # subsequent round routes to `invoke_codex_for_retry` again while the
     # Evaluator never gets a chance to re-verify the fix. The retry prompt
@@ -722,7 +722,7 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
             return RouteDecision(
                 rule="eval_trigger_with_fail",
                 action="invoke_codex_for_retry",
-                rationale="generator already committed and evaluator requested a targeted retry",
+                rationale="evaluator requested a targeted retry of committed sprint output",
                 mode="implementing",
                 current_sprint=trigger_sprint,
                 command=codex_command(
@@ -731,8 +731,9 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
                     f"=== Evaluator verdict ({failed_eval.name}) ===\n"
                     f"{failed_body}\n"
                     f"=== end verdict ===\n\n"
-                    f"Re-commit and write eval-trigger.txt containing exactly: sprint={trigger_sprint}. "
-                    "STOP after writing eval-trigger.txt. Do NOT advance to any later sprint. "
+                    f"Write .sprintfoundry/commit-requests/sprint-{trigger_sprint}.json "
+                    "with attempt='retry'. Do not run git commit or write eval-trigger.txt. "
+                    "STOP after updating claude-progress.txt. Do NOT advance to any later sprint. "
                     "Follow AGENTS.md Generator rules."
                 ),
                 cleanup_eval_result=True,
@@ -756,8 +757,9 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
                 current_sprint=current_sprint,
                 command=codex_command(
                     f"sprint-contract.md is approved. Implement Sprint {current_sprint} ONLY. "
-                    f"After committing, write eval-trigger.txt containing exactly: sprint={current_sprint}. "
-                    "STOP IMMEDIATELY after writing eval-trigger.txt. "
+                    f"Write .sprintfoundry/commit-requests/sprint-{current_sprint}.json "
+                    "for Orchestrator commit. Do not run git commit or write eval-trigger.txt. "
+                    "STOP IMMEDIATELY after updating claude-progress.txt. "
                     f"Do NOT read planner-spec.json to find Sprint {current_sprint + 1} or any later sprint. "
                     "Do NOT create a new branch or implement any other sprint. "
                     "Follow AGENTS.md Generator rules."

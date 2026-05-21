@@ -129,7 +129,7 @@ sha256sum --check sprint-contract.md.sha256 || {
 ```
 
 If the contract checksum fails mid-implementation, stop immediately — do **not**
-commit. Signal the Orchestrator by writing a flag file:
+request a commit. Signal the Orchestrator by writing a flag file:
 
 ```bash
 echo "sprint-contract.md modified after approval at $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -147,14 +147,14 @@ Implementation rules:
 - Write tests alongside implementation
 - Never use inline styles in React components
 - Prefer small coherent edits over layering more code on top of weak code
-- Delete temporary scaffolding, dead branches, and debug helpers before commit
+- Delete temporary scaffolding, dead branches, and debug helpers before requesting commit
 
 ### Step 4 — Self-check
 
 For each success criterion in `sprint-contract.md`:
 
 - Run the corresponding test steps manually
-- Fix any failing behavior before committing
+- Fix any failing behavior before requesting commit
 
 ```bash
 pytest -q
@@ -168,32 +168,49 @@ Also do a cleanup pass:
 - collapse duplicate logic introduced by retries
 - make sure the final diff still matches the approved sprint scope
 
-### Step 5 — Commit
+### Step 5 — Prepare commit request
 
-Remove the contract checksum file before committing — it is a session artifact,
-not part of the project source:
+Codex runs inside a sandbox that may not be allowed to write `.git` metadata.
+Do **not** run `git add`, `git commit`, or write `eval-trigger.txt`. Instead,
+prepare a commit request for the Orchestrator.
+
+```bash
+mkdir -p .sprintfoundry/commit-requests
+CONTRACT_SHA="$(cut -d' ' -f1 sprint-contract.md.sha256)"
+cat > ".sprintfoundry/commit-requests/sprint-<N>.json" <<JSON
+{
+  "sprint": <N>,
+  "attempt": "initial",
+  "contract_sha256": "$CONTRACT_SHA",
+  "commit_message": "feat(sprint-<N>): <imperative description>",
+  "changed_files": [
+    "<relative path changed by this sprint>"
+  ],
+  "tests": [
+    {"command": "pytest -q", "status": "passed"}
+  ]
+}
+JSON
+```
+
+Remove `sprint-contract.md.sha256` after writing the request. It is a session
+artifact, not project source.
 
 ```bash
 rm -f sprint-contract.md.sha256
-git add -A
-git commit -m "feat(sprint-<N>): <imperative description>"
 ```
 
-### Step 6 — Signal Evaluator
+### Step 6 — Handoff to Orchestrator
 
-Write `eval-trigger.txt` **before** updating `claude-progress.txt`. The trigger
-is the authoritative signal; if the progress-log write is interrupted the
-Orchestrator can still discover the committed sprint.
+Update `claude-progress.txt` after the commit request exists. The Orchestrator
+will validate the request, commit on the active sprint branch, then write
+`eval-trigger.txt`.
 
 ```bash
-# 1. Trigger first — Orchestrator polls this file.
-echo "sprint=<N>" > eval-trigger.txt
-
-# 2. Update progress log after trigger is on disk.
 echo "## Sprint <N> — $(date '+%Y-%m-%d %H:%M')" >> claude-progress.txt
-echo "Status: committed, pending Evaluator CHECK" >> claude-progress.txt
+echo "Status: implementation ready, pending Orchestrator commit" >> claude-progress.txt
 
-# 3. Post-append compression check — mandatory per AGENTS.md policy.
+# Post-append compression check — mandatory per AGENTS.md policy.
 LINE_COUNT=$(wc -l < claude-progress.txt)
 SPRINT_COUNT=$(grep -c "^## Sprint " claude-progress.txt 2>/dev/null || echo 0)
 if [ "$LINE_COUNT" -gt 60 ] || [ "$SPRINT_COUNT" -gt 3 ]; then
@@ -209,6 +226,8 @@ fi
 
 Keep `claude-progress.txt` compact by rewriting older entries into a short summary when needed.
 
+Stop after the progress update. Do not inspect the next sprint.
+
 ---
 
 ## Handling SPRINT FAIL
@@ -217,18 +236,30 @@ When a sprint fails:
 
 1. Read `.sprintfoundry/eval-results/eval-result-{N}.md` fully
 2. Fix only the cited issues
-3. Re-commit with:
+3. Write a retry commit request:
 
 ```bash
-git commit -m "fix(sprint-<N>): address evaluator failure"
+mkdir -p .sprintfoundry/commit-requests
+cat > ".sprintfoundry/commit-requests/sprint-<N>.json" <<JSON
+{
+  "sprint": <N>,
+  "attempt": "retry",
+  "commit_message": "fix(sprint-<N>): address evaluator failure",
+  "changed_files": [
+    "<relative path changed by this retry>"
+  ],
+  "tests": [
+    {"command": "pytest -q", "status": "passed"}
+  ]
+}
+JSON
 ```
 
-4. Write `eval-trigger.txt` before updating `claude-progress.txt`:
+4. Update progress and stop:
 
 ```bash
-echo "sprint=<N>-retry" > eval-trigger.txt
 echo "## Sprint <N> retry — $(date '+%Y-%m-%d %H:%M')" >> claude-progress.txt
-echo "Status: fix committed, pending re-CHECK" >> claude-progress.txt
+echo "Status: retry ready, pending Orchestrator commit" >> claude-progress.txt
 ```
 
 ---
@@ -237,6 +268,7 @@ echo "Status: fix committed, pending re-CHECK" >> claude-progress.txt
 
 - Evaluate your own sprint output
 - Write `SPRINT PASS` or `SPRINT FAIL`
+- Run `git add`, `git commit`, or write `eval-trigger.txt`
 - Start coding before `CONTRACT APPROVED`
 - Remove or modify existing tests
 - Commit with failing tests

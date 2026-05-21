@@ -24,9 +24,9 @@ Use:
 | Agent | Tool | Role |
 |-------|------|------|
 | Planner | Claude Code | Turns user prompt into `planner-spec.json`. Runs once per project. |
-| Generator | **Codex CLI** | Reads spec + approved contract, implements one sprint, commits. |
+| Generator | **Codex CLI** | Reads spec + approved contract, implements one sprint, writes a commit request. |
 | Evaluator | Claude Code | Contract review + independent black-box CHECK via browser, API, CLI, job, or library verification. |
-| Orchestrator | Claude Code | Routes between agents. Never writes code or evaluates. |
+| Orchestrator | Claude Code | Routes between agents, owns Git commits and triggers. Never writes code or evaluates. |
 
 ---
 
@@ -44,7 +44,7 @@ User prompt (1–4 sentences)
                                    │         │ Generator │               │
                                    │         │  (Codex)  │               │
                                    │         └─────┬─────┘               │
-                                   │               │ code + commit        │
+                                   │               │ code + commit request│
                                    │         ┌─────▼──────┐              │
                                    │         │  Evaluator │ ◀── verify   │
                                    │         │  (Claude)  │               │
@@ -55,6 +55,8 @@ User prompt (1–4 sentences)
 ```
 
 **The gate rule**: Generator never marks a sprint complete. Only Evaluator writes SPRINT PASS.
+**The Git rule**: Generator never writes `.git` metadata or `eval-trigger.txt`;
+Orchestrator commits from a validated commit request.
 
 ---
 
@@ -70,12 +72,13 @@ State lives in files, never in conversation memory.
 | `claude-progress.txt` | Generator | Cross-session handoff log |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done — **deleted by Orchestrator after SPRINT PASS** |
 | `.sprintfoundry/eval-results/eval-result-{N}.md` | Evaluator | Per-sprint scores and critique |
-| `eval-trigger.txt` | Generator | Signal file: `sprint=N` written after commit — **must match the fenced sprint** |
+| `.sprintfoundry/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation |
+| `eval-trigger.txt` | Orchestrator | Signal file: `sprint=N` or `sprint=N-retry` written after Orchestrator commit — **must match the fenced sprint** |
 | `sprint-fence.json` | Orchestrator | Written before Codex starts implementing; records expected sprint + base git commit. Any eval-trigger.txt that names a different sprint triggers an immediate boundary-violation pause. |
 | `run-state.json` | Orchestrator | Unattended mode state, retry counters, pause/escalation flags — **cache, not truth** |
 | `harness-audit.ndjson` | Orchestrator + git hooks + humans | **Append-only forensic timeline**: every orchestrator run, audit finding, state transition, commit, hook block/bypass, and human note. Never rewritten. See "Append-only audit trail" below. |
 | `init.sh` | Planner | Reproducible dev server startup |
-| `git history` | Generator | State recovery and audit trail |
+| `git history` | Orchestrator | State recovery and audit trail |
 
 After the initial plan exists, all new work must be classified before Generator sees it:
 
@@ -304,7 +307,8 @@ When branch-per-sprint mode is used, `run-state.json` should also track:
 
 **Invoked by**: Orchestrator via `codex exec --full-auto --skip-git-repo-check "..."`
 
-**Output**: committed code + updated `claude-progress.txt` + `eval-trigger.txt`.
+**Output**: implemented code + updated `claude-progress.txt` +
+`.sprintfoundry/commit-requests/sprint-{N}.json`.
 
 ### Session startup ritual (mandatory, no exceptions)
 
@@ -380,7 +384,7 @@ sha256sum sprint-contract.md > sprint-contract.md.sha256
 ```
 
 If `sprint-contract.md` is modified after this point (checksum mismatch), stop
-immediately and surface the change to the Orchestrator — do not commit code
+immediately and surface the change to the Orchestrator — do not request a commit
 against a modified contract.
 
 - Read `planner-spec.json` for VDL and architecture constraints before writing code.
@@ -394,14 +398,14 @@ against a modified contract.
 **Step 4 — Self-check**
 
 For each success criterion in `sprint-contract.md`, verify it manually.
-Fix any failures before committing.
+Fix any failures before requesting a commit.
 
 ```bash
 pytest -q           # unit tests must pass
 git diff --stat     # review scope of changes
 ```
 
-Also do one context hygiene pass before commit:
+Also do one context hygiene pass before the commit request:
 
 - remove dead code introduced during the sprint
 - remove temporary debug output
@@ -409,28 +413,37 @@ Also do one context hygiene pass before commit:
 - check that file names, components, and helpers still match the current architecture
 - ensure the change set is still about the approved sprint, not opportunistic extras
 
-**Step 5 — Commit**
+**Step 5 — Commit request**
+
+Codex may not be able to write `.git/index.lock` from inside its sandbox. It
+must not run `git add`, `git commit`, or write `eval-trigger.txt`.
 
 ```bash
-git add -A
-git commit -m "feat(sprint-<N>): <imperative description, 72 chars max>"
+mkdir -p .sprintfoundry/commit-requests
+CONTRACT_SHA="$(cut -d' ' -f1 sprint-contract.md.sha256)"
+cat > ".sprintfoundry/commit-requests/sprint-<N>.json" <<JSON
+{
+  "sprint": <N>,
+  "attempt": "initial",
+  "contract_sha256": "$CONTRACT_SHA",
+  "commit_message": "feat(sprint-<N>): <imperative description, 72 chars max>",
+  "changed_files": ["<relative paths>"],
+  "tests": [{"command": "pytest -q", "status": "passed"}]
+}
+JSON
+rm -f sprint-contract.md.sha256
 ```
 
-Confirm the commit is on the active sprint branch before signaling the evaluator.
+The Orchestrator validates this request, confirms the active sprint branch, then
+commits and writes `eval-trigger.txt`.
 
-**Step 6 — Signal Evaluator**
+**Step 6 — Handoff**
 
-Write `eval-trigger.txt` **before** updating `claude-progress.txt`. This ordering
-ensures the Orchestrator can always discover a committed sprint even if the
-progress-log write is interrupted.
+Update `claude-progress.txt` after the commit request exists:
 
 ```bash
-# 1. Write the trigger first — this is the authoritative signal to Orchestrator.
-echo "sprint=<N>" > eval-trigger.txt
-
-# 2. Update the progress log after the trigger is safely on disk.
 echo "## Sprint <N> — $(date '+%Y-%m-%d %H:%M')" >> claude-progress.txt
-echo "Status: committed, pending Evaluator CHECK" >> claude-progress.txt
+echo "Status: implementation ready, pending Orchestrator commit" >> claude-progress.txt
 ```
 
 When updating `claude-progress.txt`, keep the file compact per the policy above.
@@ -442,12 +455,13 @@ When invoked after a SPRINT FAIL:
 
 1. Read `.sprintfoundry/eval-results/eval-result-{N}.md` fully.
 2. Fix only what the Evaluator cited.
-3. `git commit -m "fix(sprint-<N>): address evaluator failure"`
-4. Write `eval-trigger.txt` **before** updating `claude-progress.txt`:
+3. Write `.sprintfoundry/commit-requests/sprint-{N}.json` with
+   `attempt: "retry"` and
+   `commit_message: "fix(sprint-<N>): address evaluator failure"`.
+4. Update `claude-progress.txt`:
    ```bash
-   echo "sprint=<N>-retry" > eval-trigger.txt
    echo "## Sprint <N> retry — $(date '+%Y-%m-%d %H:%M')" >> claude-progress.txt
-   echo "Status: fix committed, pending re-CHECK" >> claude-progress.txt
+   echo "Status: retry ready, pending Orchestrator commit" >> claude-progress.txt
    ```
 5. `retry_count` is owned by the Orchestrator. Generator must not modify `run-state.json`.
    The Orchestrator increments `retry_count` before invoking this Codex session.
@@ -604,7 +618,8 @@ Every sprint must pass through all four phases in order.  No phase may be skippe
 │       │         Orchestrator writes sprint-fence.json   │
 │       ▼                                                 │
 │  3. IMPLEMENT   Codex implements Sprint N ONLY          │
-│       │         Writes eval-trigger.txt  → STOPS        │
+│       │         Writes commit request  → STOPS          │
+│       │         Orchestrator commits + writes trigger   │
 │       ▼                                                 │
 │  4. EVALUATE    Evaluator runs black-box CHECK          │
 │       │         Writes .sprintfoundry/eval-results/eval-result-N.md                 │
@@ -715,7 +730,8 @@ planner-spec.json ready
 [SPRINT N]
     ├─ Codex proposes sprint-contract.md
     ├─ Claude Evaluator: CONTRACT APPROVED  (no code yet)
-    ├─ Codex implements + commits + writes eval-trigger.txt
+    ├─ Codex implements + writes commit request
+    ├─ Orchestrator commits + writes eval-trigger.txt
     ├─ Claude Evaluator: eval-result-{N}.md
     │       SPRINT PASS → Orchestrator cleans up, next sprint
     │       SPRINT FAIL → Codex revises → re-CHECK
@@ -741,14 +757,14 @@ codex exec --full-auto \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
-  "sprint-contract.md is approved. Implement Sprint N. Commit and write eval-trigger.txt. Follow AGENTS.md."
+  "sprint-contract.md is approved. Implement Sprint N. Write a commit request. Do not run git commit or write eval-trigger.txt. Follow AGENTS.md."
 
 # Fix after SPRINT FAIL
 codex exec --full-auto \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
-  "Sprint N failed. Read .sprintfoundry/eval-results/eval-result-N.md. Fix only the cited issues. Re-commit and update eval-trigger.txt."
+  "Sprint N failed. Read .sprintfoundry/eval-results/eval-result-N.md. Fix only the cited issues. Write a retry commit request. Do not run git commit or write eval-trigger.txt."
 ```
 
 ---
@@ -826,7 +842,7 @@ prevents misattributing failures.
 - Generator's unit tests pass **and** Evaluator's E2E tests fail
   → Likely an environment/integration issue (missing env var, wrong port, DB not seeded).
   Diagnose `init.sh` and integration layer before blaming the code.
-- Generator's unit tests fail → Do not signal Evaluator. Fix before committing.
+- Generator's unit tests fail → Do not signal Evaluator. Fix before requesting commit.
 - Evaluator's E2E tests fail repeatedly on the same criterion after code fixes
   → Treat as architecture drift candidate; check the criteria above.
 

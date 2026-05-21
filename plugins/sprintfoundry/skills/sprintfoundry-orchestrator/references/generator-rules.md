@@ -54,7 +54,7 @@ If `sprint-contract.md` changes after this checksum (mismatch detected), stop an
 - Do not carry forward abstractions unless required by current sprint
 - Check that implementation branch matches `run-state.json active_branch`
 
-**Step 4a — 静态分析（强制，失败则不得 commit）**
+**Step 4a — 静态分析（强制，失败则不得请求 commit）**
 
 根据项目栈运行对应工具，全部通过才能继续：
 
@@ -69,9 +69,9 @@ python3 -m mypy . --ignore-missing-imports --no-error-summary
 ```
 
 lint/type 错误必须修复，不可用 `// eslint-disable` 或 `# type: ignore` 绕过，
-除非该行本身有充分理由（须在 commit message 中说明）。
+除非该行本身有充分理由（须在 commit request 的 message 中说明）。
 
-**Step 4b — 单测与覆盖率（强制，低于阈值则不得 commit）**
+**Step 4b — 单测与覆盖率（强制，低于阈值则不得请求 commit）**
 
 ```bash
 # JavaScript
@@ -100,20 +100,35 @@ git diff --stat     # 确认变更范围未越界
 
 对 `sprint-contract.md` 中每条成功标准手动验证一遍。
 
-**只有 4a + 4b + 4c + 4d 全部通过，才可执行 Step 5（Commit）。**
+**只有 4a + 4b + 4c + 4d 全部通过，才可执行 Step 5（Commit Request）。**
 
-### Step 4 — Signal (write eval-trigger BEFORE progress log)
+### Step 5 — Commit request (Orchestrator owns Git)
+
+Codex may be unable to write `.git/index.lock` inside the sandbox. It must not
+run `git add`, `git commit`, or write `eval-trigger.txt`. Instead it prepares a
+commit request:
 
 ```bash
-# 1. Write trigger first — authoritative signal
-echo "sprint=<N>" > eval-trigger.txt
-
-# 2. Update progress log after trigger is safely on disk
+mkdir -p .sprintfoundry/commit-requests
+CONTRACT_SHA="$(cut -d' ' -f1 sprint-contract.md.sha256)"
+cat > ".sprintfoundry/commit-requests/sprint-<N>.json" <<JSON
+{
+  "sprint": <N>,
+  "attempt": "initial",
+  "contract_sha256": "$CONTRACT_SHA",
+  "commit_message": "feat(sprint-<N>): <imperative description, 72 chars max>",
+  "changed_files": ["<relative paths>"],
+  "tests": [{"command": "pytest -q", "status": "passed"}]
+}
+JSON
+rm -f sprint-contract.md.sha256
 echo "## Sprint <N> — $(date '+%Y-%m-%d %H:%M')" >> claude-progress.txt
-echo "Status: committed, pending Evaluator CHECK" >> claude-progress.txt
+echo "Status: implementation ready, pending Orchestrator commit" >> claude-progress.txt
 ```
 
-**Stop immediately after writing `eval-trigger.txt`.** Do not read `planner-spec.json` for the next sprint. Do not create a new branch. The Orchestrator is the only entity that may advance the sprint counter.
+**Stop immediately after writing the commit request and progress update.** Do
+not read `planner-spec.json` for the next sprint. Do not create a new branch.
+The Orchestrator commits, writes `eval-trigger.txt`, and advances routing.
 
 ---
 
@@ -121,8 +136,8 @@ echo "Status: committed, pending Evaluator CHECK" >> claude-progress.txt
 
 1. Read `.sprintfoundry/eval-results/eval-result-N.md` fully (Orchestrator inlines it into the prompt)
 2. Fix **only** what the Evaluator cited
-3. `git commit -m "fix(sprint-N): address evaluator failure"`
-4. Write `eval-trigger.txt` with `sprint=N-retry` **before** updating progress log
+3. Write `.sprintfoundry/commit-requests/sprint-N.json` with `attempt: "retry"` and `commit_message: "fix(sprint-N): address evaluator failure"`
+4. Update `claude-progress.txt` with "pending Orchestrator commit"
 5. Stop immediately
 
 ---
@@ -138,14 +153,21 @@ If this file exists, Codex is authorised to implement **only** the sprint named 
 
 ---
 
-## Git commit convention
+## Commit request convention
 
-```bash
-git add -A
-git commit -m "feat(sprint-<N>): <imperative description, 72 chars max>"
+```json
+{
+  "sprint": N,
+  "attempt": "initial | retry",
+  "contract_sha256": "<approved contract sha256 when available>",
+  "commit_message": "feat(sprint-<N>): <imperative description, 72 chars max>",
+  "changed_files": ["<relative paths>"],
+  "tests": [{"command": "pytest -q", "status": "passed"}]
+}
 ```
 
-Confirm commit is on the active sprint branch before writing `eval-trigger.txt`.
+The Orchestrator confirms the active sprint branch before committing and writing
+`eval-trigger.txt`.
 
 ---
 
@@ -155,7 +177,8 @@ Confirm commit is on the active sprint branch before writing `eval-trigger.txt`.
 - Never write "SPRINT PASS" or "SPRINT FAIL"
 - Never begin coding before "CONTRACT APPROVED" is in `sprint-contract.md`
 - Never remove or modify existing tests
-- Never commit with failing tests
+- Never request a commit with failing tests
+- Never run `git add`, `git commit`, or write `eval-trigger.txt`
 - Use `git revert` (not patches) to recover from broken state
 - Never write to `run-state.json`
 - Never merge a sprint branch into `main` before Evaluator approval

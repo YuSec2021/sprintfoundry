@@ -80,6 +80,8 @@ memory:
 ```bash
 cat run-state.json 2>/dev/null || echo "[no run-state]"
 cat claude-progress.txt 2>/dev/null || echo "[no progress]"
+find .sprintfoundry/commit-requests -maxdepth 1 -name 'sprint-*.json' 2>/dev/null \
+  || echo "[no commit requests]"
 cat eval-trigger.txt 2>/dev/null || echo "[no eval-trigger]"
 cat sprint-contract.md 2>/dev/null | head -40 || echo "[no contract]"
 find .sprintfoundry/eval-results -maxdepth 1 -name 'eval-result-*.md' 2>/dev/null \
@@ -102,13 +104,14 @@ Apply this order:
 1. `needs_human=true` → pause.
 2. Missing `planner-spec.json` → Planner creates spec, `init.sh`, progress log.
 3. Sprint-history audit inconsistent → pause.
-4. `eval-trigger.txt` exists → Quality Gate → Evaluator CHECK or targeted Codex retry.
-5. `sprint-contract.md` exists but unapproved → Evaluator contract review.
-6. Approved `sprint-contract.md` → prepare branch/fence, invoke Codex implementation.
-7. `bug-report.md` → Codex proposes bugfix contract.
-8. `change-request.md` → route by `Type`.
-9. All planned sprints PASS → complete.
-10. Otherwise → Codex proposes the next sprint contract.
+4. Commit request exists → Orchestrator validates, commits, writes `eval-trigger.txt`.
+5. `eval-trigger.txt` exists → Quality Gate → Evaluator CHECK or targeted Codex retry.
+6. `sprint-contract.md` exists but unapproved → Evaluator contract review.
+7. Approved `sprint-contract.md` → prepare branch/fence, invoke Codex implementation.
+8. `bug-report.md` → Codex proposes bugfix contract.
+9. `change-request.md` → route by `Type`.
+10. All planned sprints PASS → complete.
+11. Otherwise → Codex proposes the next sprint contract.
 
 ## Verification Modes
 
@@ -138,6 +141,7 @@ codex exec --full-auto \
 
 - Claude Planner/Evaluator/Orchestrator never write application code.
 - Codex Generator never evaluates itself.
+- Codex Generator never runs `git add`, `git commit`, or writes `eval-trigger.txt`; Orchestrator owns Git commits and triggers.
 - No code before `CONTRACT APPROVED`.
 - No sprint advancement without `SPRINT PASS`.
 - Do not clear `needs_human=true` automatically.

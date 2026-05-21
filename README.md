@@ -62,14 +62,15 @@ SprintFoundry uses a strict separation of responsibility:
 | Role | Runtime | Responsibility |
 | --- | --- | --- |
 | Planner | Claude sub-agent | Turns a short user request into product direction, verification mode, and sprint plan |
-| Generator | Codex CLI | Implements one approved sprint, self-checks, commits, and writes `eval-trigger.txt` |
+| Generator | Codex CLI | Implements one approved sprint, self-checks, and writes a commit request |
 | Evaluator | Claude sub-agent + verification tools | Reviews contracts and verifies committed work through the configured external surface |
-| Orchestrator | `sprintfoundry-orchestrator` skill | Reads file state, chooses the next route, invokes agents, and pauses on unsafe state |
+| Orchestrator | `sprintfoundry-orchestrator` skill | Reads file state, invokes agents, owns Git commits and `eval-trigger.txt`, and pauses on unsafe state |
 
 Important boundaries:
 
 - Claude does not write application code.
-- Codex does not evaluate its own output.
+- Codex does not evaluate its own output or write Git metadata.
+- `eval-trigger.txt` is written only after the Orchestrator has committed the sprint.
 - Progress advances through file artifacts, not chat memory.
 - A sprint is complete only when `.sprintfoundry/eval-results/eval-result-{N}.md` contains `SPRINT PASS`.
 
@@ -86,10 +87,11 @@ flowchart TD
     C -- yes --> A1{"CONTRACT APPROVED?"}
     A1 -- no --> CR["Evaluator reviews contract"]
     A1 -- yes --> G["Codex implements exactly one sprint"]
-    G --> T["Codex commits and writes eval-trigger.txt"]
+    G --> RQ["Codex writes commit request"]
+    RQ --> T["Orchestrator commits and writes eval-trigger.txt"]
     T --> Q["Quality Gate: lint, types, tests, coverage, security"]
     Q -- fail --> QF["Codex fixes only quality-gate failures"]
-    QF --> T
+    QF --> RQ
     Q -- pass --> E["Evaluator black-box CHECK"]
     E --> R{"Verdict"}
     R -- "SPRINT PASS" --> V["Version bump, changelog, tag, cleanup"]
@@ -134,7 +136,8 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 | `planner-spec.json` | Planner | Product spec, design language, tech stack, verification mode, and sprint list |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint acceptance contract; code cannot start until approved |
 | `sprint-fence.json` | Orchestrator | Expected sprint number and base commit before implementation starts |
-| `eval-trigger.txt` | Generator | Signal that a committed sprint is ready for quality gate and evaluation |
+| `.sprintfoundry/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation |
+| `eval-trigger.txt` | Orchestrator | Signal that a committed sprint is ready for quality gate and evaluation |
 | `quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK |
 | `.sprintfoundry/eval-results/eval-result-{N}.md` | Evaluator | Sprint verdict and evidence; only `SPRINT PASS` completes a sprint |
 | `run-state.json` | Orchestrator | Current mode, retry counters, active branch, pause state, version metadata |

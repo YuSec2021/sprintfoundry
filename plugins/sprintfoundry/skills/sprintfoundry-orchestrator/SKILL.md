@@ -24,6 +24,9 @@ You are the **Orchestrator** of a three-agent GAN harness:
 
 You are the only agent the user talks to directly.
 You never write application code. You never evaluate sprint quality.
+You do own Git metadata operations: Codex may be sandboxed away from `.git`, so
+the Orchestrator validates commit requests, performs `git add`/`git commit`,
+and writes `eval-trigger.txt`.
 
 ---
 
@@ -376,6 +379,97 @@ Historical gaps (informational findings) do **not** pause routing. They are note
 ```
 Read `references/planner-agent.md` first.
 
+### Rule 1.5 — Commit request exists (Generator finished, Orchestrator commits)
+
+Commit requests live at `.sprintfoundry/commit-requests/sprint-N.json`. They
+mean Codex finished implementation or a retry but did not touch `.git` or
+`eval-trigger.txt`.
+
+Run this before Rule 2 so retries can be committed even while an old
+`eval-trigger.txt` is still present.
+
+```bash
+python3 - <<'PY'
+import json, pathlib, subprocess, sys
+
+root = pathlib.Path.cwd()
+req_dir = root / ".sprintfoundry" / "commit-requests"
+requests = sorted(req_dir.glob("sprint-*.json")) if req_dir.exists() else []
+if not requests:
+    print("[commit-request] none")
+    sys.exit(0)
+if len(requests) > 1:
+    print(f"[commit-request] ERROR: multiple requests: {[p.name for p in requests]}")
+    sys.exit(2)
+
+req_path = requests[0]
+req = json.loads(req_path.read_text())
+sprint = int(req["sprint"])
+attempt = req.get("attempt", "initial")
+msg = req.get("commit_message") or f"feat(sprint-{sprint}): implement sprint"
+
+rs_path = root / "run-state.json"
+rs = json.loads(rs_path.read_text()) if rs_path.exists() else {}
+expected = int(rs.get("current_sprint", sprint))
+if sprint != expected:
+    print(f"[commit-request] ERROR: request sprint {sprint} != current_sprint {expected}")
+    sys.exit(2)
+
+cur = subprocess.check_output(["git", "branch", "--show-current"], text=True).strip()
+active = rs.get("active_branch")
+base = rs.get("base_branch", "main")
+if active and cur != active:
+    print(f"[commit-request] ERROR: current branch {cur!r} != active_branch {active!r}")
+    sys.exit(2)
+if cur == base:
+    print(f"[commit-request] ERROR: refusing implementation commit on base branch {base!r}")
+    sys.exit(2)
+
+sha_file = root / "sprint-contract.md.sha256"
+expected_sha = req.get("contract_sha256")
+if expected_sha and sha_file.exists():
+    actual = sha_file.read_text().split()[0]
+    if actual != expected_sha:
+        print("[commit-request] ERROR: contract sha mismatch")
+        sys.exit(2)
+
+changed = req.get("changed_files") or []
+for path in changed:
+    p = pathlib.Path(path)
+    if p.is_absolute() or ".." in p.parts:
+        print(f"[commit-request] ERROR: unsafe changed_files path: {path}")
+        sys.exit(2)
+
+if changed:
+    subprocess.check_call(["git", "add", "--", *changed])
+else:
+    subprocess.check_call(["git", "add", "-A"])
+
+# Never commit runtime handoff artifacts.
+subprocess.run(["git", "reset", "-q", "--", "eval-trigger.txt", "sprint-contract.md.sha256", ".sprintfoundry"], check=False)
+
+staged = subprocess.run(["git", "diff", "--cached", "--quiet"])
+if staged.returncode == 0:
+    print("[commit-request] ERROR: no staged changes to commit")
+    sys.exit(2)
+
+subprocess.check_call(["git", "commit", "-m", msg])
+
+trigger = root / "eval-trigger.txt"
+if attempt == "initial":
+    trigger.write_text(f"sprint={sprint}\n")
+else:
+    trigger.write_text(f"sprint={sprint}-retry\n")
+req_path.unlink()
+if sha_file.exists():
+    sha_file.unlink()
+print(f"[commit-request] committed sprint {sprint}; wrote {trigger.name}")
+PY
+```
+
+If the script exits with code 2, pause with `needs_human=true` and surface the
+printed error. If it succeeds, continue routing from Rule 2.
+
 ### Rule 2 — eval-trigger.txt exists (sprint committed, needs CHECK or retry)
 
 Parse N from `eval-trigger.txt`:
@@ -438,8 +532,10 @@ IF quality-gate-N.md Verdict is FAIL
     → increment run-state.json: quality_retry_count += 1
       → Codex: "Sprint N quality gate failed. Read quality-gate-N.md.
                 Fix ONLY the ❌ items (lint errors, type errors, coverage gaps).
-                Do not change functional logic. Re-commit and rewrite eval-trigger.txt
-                with the same content. STOP after writing eval-trigger.txt."
+                Do not change functional logic. Write
+                .sprintfoundry/commit-requests/sprint-N.json with
+                attempt='quality_retry'. Do not run git commit or edit
+                eval-trigger.txt. STOP after updating claude-progress.txt."
       (Loop back to Rule 2.1 on next Orchestrator run)
 ```
 
@@ -921,8 +1017,9 @@ codex exec --full-auto \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
   "sprint-contract.md is approved. Implement Sprint N ONLY.
-   After committing, write eval-trigger.txt containing exactly: sprint=N.
-   STOP IMMEDIATELY after writing eval-trigger.txt. Follow AGENTS.md."
+   Do not run git add, git commit, or write eval-trigger.txt.
+   Write .sprintfoundry/commit-requests/sprint-N.json for Orchestrator commit.
+   STOP IMMEDIATELY after updating claude-progress.txt. Follow AGENTS.md."
 
 # Fix after SPRINT FAIL (inline the eval result body before running)
 cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
@@ -931,8 +1028,9 @@ codex exec --full-auto \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
   "Sprint N failed. Fix ONLY the cited issues from the inlined Evaluator verdict below.
-   Re-commit and write eval-trigger.txt containing exactly: sprint=N-retry.
-   STOP after writing eval-trigger.txt. Follow AGENTS.md.
+   Do not run git add, git commit, or write eval-trigger.txt.
+   Write .sprintfoundry/commit-requests/sprint-N.json with attempt='retry'.
+   STOP after updating claude-progress.txt. Follow AGENTS.md.
    --- EVALUATOR VERDICT ---
    {paste .sprintfoundry/eval-results/eval-result-N.md body here}"
 ```

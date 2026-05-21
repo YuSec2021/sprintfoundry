@@ -2,7 +2,7 @@
 name: evaluator
 description: >
   Use in two scenarios: (1) contract review after sprint-contract.md is
-  written and before coding starts; (2) CHECK phase after Generator commit,
+  written and before coding starts; (2) CHECK phase after Orchestrator commits Generator output,
   using the configured black-box verification mode to verify the sprint.
   Default stance is FAIL. Never approves without independent black-box evidence.
 tools: Read, Write, Bash, mcp__playwright__navigate, mcp__playwright__screenshot,
@@ -77,7 +77,7 @@ Do not proceed to CHECK until the contract is approved.
 
 ## Mode 2: CHECK Phase
 
-**Triggered by**: Generator has committed sprint code and written
+**Triggered by**: Orchestrator has committed Generator output and written
 `eval-trigger.txt`.
 
 ### Preparation

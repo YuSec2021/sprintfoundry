@@ -13,7 +13,8 @@ State lives in files, never in conversation memory.
 | `planner-spec.json` | Planner | Source of truth — product spec and sprint list |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done — deleted by Orchestrator after SPRINT PASS |
 | `.sprintfoundry/eval-results/eval-result-{N}.md` | Evaluator | Per-sprint scores and critique; kept out of the project root |
-| `eval-trigger.txt` | Generator | Signal file: `sprint=N` written after commit |
+| `.sprintfoundry/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation |
+| `eval-trigger.txt` | Orchestrator | Signal file: `sprint=N` or `sprint=N-retry` written after Orchestrator commit |
 | `sprint-fence.json` | Orchestrator | Records expected sprint + base git commit before Codex starts |
 | `run-state.json` | Orchestrator | Unattended mode state, retry counters, pause/escalation flags |
 | `claude-progress.txt` | Generator | Cross-session handoff log (compact rolling summary) |
@@ -36,7 +37,8 @@ After initial planning, all new work is classified before Generator sees it:
 1. CONTRACT    Generator proposes sprint-contract.md
 2. APPROVAL    Evaluator writes "CONTRACT APPROVED"
                Orchestrator writes sprint-fence.json
-3. IMPLEMENT   Codex implements Sprint N ONLY → writes eval-trigger.txt → STOPS
+3. IMPLEMENT   Codex implements Sprint N ONLY → writes commit request → STOPS
+               Orchestrator commits and writes eval-trigger.txt
 4. EVALUATE    Evaluator runs black-box CHECK → writes .sprintfoundry/eval-results/eval-result-N.md
 
 SPRINT PASS?
@@ -99,7 +101,7 @@ When pausing:
 One branch per sprint. Naming: `codex/sprint-<N>-<short-slug>` (fallback: `codex/sprint-<N>`).
 
 - Create fresh branch before implementation begins each sprint
-- Contract drafting may happen on any branch; implementation commits must be on the sprint branch
+- Contract drafting may happen on any branch; Orchestrator implementation commits must be on the sprint branch
 - Retries for a failed sprint stay on the same sprint branch
 - New sprint always gets a new branch — never reuse the previous sprint branch
 - Merge into `main` only after `SPRINT PASS`
@@ -153,7 +155,7 @@ python3 scripts/harness-log.py note --text "reason for manual action"
 
 Failure attribution:
 - Unit pass + E2E fail → environment/integration issue (diagnose `init.sh` first)
-- Unit fail → Generator fixes before committing (never signal Evaluator)
+- Unit fail → Generator fixes before requesting commit (never signal Evaluator)
 - E2E fails repeatedly after code fixes → architecture drift candidate
 
 ---

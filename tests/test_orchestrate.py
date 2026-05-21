@@ -375,7 +375,7 @@ def test_implementation_routes_on_dedicated_sprint_branch(tmp_path: Path) -> Non
 
 
 def test_implementation_prompt_includes_stop_instruction(tmp_path: Path) -> None:
-    """The Codex prompt must explicitly tell it to stop after eval-trigger.txt."""
+    """The Codex prompt must explicitly stop after the commit request handoff."""
     write_spec(tmp_path / "planner-spec.json")
     (tmp_path / "sprint-contract.md").write_text(
         "## Sprint 1\nCONTRACT APPROVED\n", encoding="utf-8"
@@ -416,7 +416,7 @@ def test_pre_commit_uses_read_only_orchestrator_check() -> None:
 #
 # Historical bug: the orchestrator routed to Codex retry whenever
 # eval-result-{N}.md contained SPRINT FAIL, regardless of whether the Evaluator
-# had *already* re-checked the latest retry. Because Codex rewriting
+# had *already* re-checked the latest retry. Because a retry handoff preserving
 # eval-trigger.txt with the same sprint number left the file system
 # indistinguishable from the pre-retry state, every subsequent orchestrator
 # round saw the same stale FAIL and launched another Codex retry — burning
@@ -472,11 +472,11 @@ def test_retry_prompt_inlines_eval_result_fail_details(tmp_path: Path) -> None:
         "retry prompt must inline the eval-result body so Codex has the "
         "cited fixes even after the file is deleted"
     )
-    assert "STOP" in command, "retry prompt must still include STOP after eval-trigger.txt"
+    assert "STOP" in command, "retry prompt must still include a STOP instruction"
 
 
 def test_next_round_after_retry_routes_to_evaluator(tmp_path: Path) -> None:
-    """End-to-end: once Codex has rewritten eval-trigger.txt after a retry, the
+    """End-to-end: once retry output is ready for re-check, the
     NEXT orchestrator call must invoke the Evaluator for live re-CHECK
     rather than looping on another Codex retry."""
     write_spec(tmp_path / "planner-spec.json")
@@ -497,8 +497,8 @@ def test_next_round_after_retry_routes_to_evaluator(tmp_path: Path) -> None:
     first_payload = json.loads(first.stdout)
     assert first_payload["action"] == "invoke_codex_for_retry"
 
-    # Simulate Codex having finished the retry: commit happened, trigger
-    # rewritten with the same sprint=1 content. eval-result-1.md is still
+    # Simulate the retry commit handoff having completed: trigger is present
+    # with the same sprint=1 content. eval-result-1.md is still
     # absent because the orchestrator deleted it before the Codex invocation.
     (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
 
@@ -537,7 +537,7 @@ def test_retry_budget_exhausts_across_full_evaluator_retry_cycles(tmp_path: Path
         )
 
     def simulate_codex_retry() -> None:
-        # Codex re-commits and rewrites eval-trigger.txt, same sprint number.
+        # Retry handoff completes and eval-trigger.txt remains on the same sprint.
         (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
 
     observed_retry_counts: list[int] = []
