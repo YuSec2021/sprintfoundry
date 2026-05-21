@@ -235,6 +235,40 @@ print(d.get('needs_human', False))
 
 If `true`: show `human-escalation.md` (if present) and **stop. Do not route until a human explicitly edits `run-state.json`.**
 
+### Pending-merge recovery
+
+After reading state, check whether a successful sprint is sitting unmerged:
+
+```bash
+python3 - <<'PY'
+import json, pathlib, re
+
+rs = json.loads(pathlib.Path("run-state.json").read_text()) if pathlib.Path("run-state.json").exists() else {}
+active  = rs.get("active_branch", "")
+base    = rs.get("base_branch", "main")
+passed_n = int(rs.get("last_successful_sprint", 0) or 0)
+needs_h  = rs.get("needs_human", False)
+
+if needs_h or not active or active == base or passed_n == 0:
+    print("No pending-merge recovery needed.")
+else:
+    # Check if the passed sprint's eval-result actually exists
+    patterns = [
+        f".sprintfoundry/eval-results/eval-result-{passed_n}.md",
+        f"eval-result-{passed_n}.md",
+    ]
+    found_pass = any(
+        "SPRINT PASS" in pathlib.Path(p).read_text(errors="ignore")
+        for p in patterns if pathlib.Path(p).exists()
+    )
+    if found_pass:
+        print(f"WARNING: Sprint {passed_n} PASSED but active_branch='{active}' != base='{base}'")
+        print(f"  The sprint branch was never merged. Re-running sprint branch merge now.")
+PY
+```
+
+If the warning fires, **run the Sprint Branch Merge script immediately** before any other routing. Do not proceed until the merge succeeds or `needs_human=true` is set.
+
 ### Progress hygiene
 
 Rewrite `claude-progress.txt` before routing if **any** of the following:
@@ -354,6 +388,9 @@ IF .sprintfoundry/eval-results/eval-result-N.md contains "SPRINT PASS"
     Run auto-version bump (see Auto-Version Policy below)
     Append "Sprint N: PASS — {date} — {new_version}" to claude-progress.txt
     Update run-state.json: last_successful_sprint=N, retry_count=0, current_version={new_version}
+    → Run Sprint Branch Merge (see below)
+    → If merge succeeded: Update run-state.json: active_branch={base_branch}
+    → If merge failed: set needs_human=true, stop — do NOT proceed to Rule 6
     → Proceed to Rule 6
 
 IF .sprintfoundry/eval-results/eval-result-N.md contains "SPRINT FAIL"
@@ -726,6 +763,118 @@ git tag -a "v${NEW_VERSION}" -m "v${NEW_VERSION}"
 git remote get-url origin >/dev/null 2>&1 && git push origin "v${NEW_VERSION}" || true
 ```
 
+### Sprint branch merge (runs after every SPRINT PASS + version-bump commit)
+
+Merge the sprint branch into `base_branch` (usually `main`) with full retry + git-lock recovery.
+
+```bash
+python3 - <<'PY'
+import json, pathlib, subprocess, sys, time
+
+rs_path = pathlib.Path("run-state.json")
+rs = json.loads(rs_path.read_text()) if rs_path.exists() else {}
+sprint_branch = rs.get("active_branch", "")
+base_branch   = rs.get("base_branch", "main")
+sprint_n      = rs.get("current_sprint", "?")
+
+# Nothing to merge if already on base or no branch recorded
+if not sprint_branch or sprint_branch == base_branch:
+    print(f"[merge] No sprint branch to merge — sprint_branch={sprint_branch!r}, base={base_branch!r}")
+    sys.exit(0)
+
+def run(cmd):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+def clear_stale_locks():
+    """Remove git lock files left by crashed processes."""
+    for lock in [".git/index.lock", ".git/MERGE_HEAD", ".git/CHERRY_PICK_HEAD"]:
+        p = pathlib.Path(lock)
+        if p.exists():
+            try:
+                p.unlink()
+                print(f"[merge] Removed stale lock: {lock}")
+            except Exception as e:
+                print(f"[merge] WARNING: could not remove {lock}: {e}")
+
+def update_run_state(updates: dict):
+    data = json.loads(rs_path.read_text()) if rs_path.exists() else {}
+    data.update(updates)
+    rs_path.write_text(json.dumps(data, indent=2))
+
+MAX_RETRIES = 3
+last_error  = ""
+
+for attempt in range(1, MAX_RETRIES + 1):
+    clear_stale_locks()
+
+    # Make sure we are on the sprint branch before merging into base
+    cur = run("git branch --show-current").stdout.strip()
+    if cur != sprint_branch:
+        r = run(f"git checkout {sprint_branch}")
+        if r.returncode != 0:
+            last_error = f"cannot checkout sprint branch: {r.stderr.strip()}"
+            print(f"[merge] attempt {attempt}: {last_error}")
+            time.sleep(5 * attempt)
+            continue
+
+    # Switch to base branch
+    r = run(f"git checkout {base_branch}")
+    if r.returncode != 0:
+        last_error = f"cannot checkout {base_branch}: {r.stderr.strip()}"
+        print(f"[merge] attempt {attempt}: {last_error}")
+        run(f"git checkout {sprint_branch}")
+        time.sleep(5 * attempt)
+        continue
+
+    # Attempt the merge
+    msg = f"merge: sprint-{sprint_n} ({sprint_branch}) → {base_branch} after SPRINT PASS"
+    r = run(f'git merge --no-ff {sprint_branch} -m "{msg}"')
+    if r.returncode == 0:
+        print(f"[merge] SUCCESS: {sprint_branch} → {base_branch}")
+        update_run_state({"active_branch": base_branch, "merge_retry_count": 0})
+        sys.exit(0)
+
+    # Merge failed — abort cleanly and maybe retry
+    last_error = r.stderr.strip() or r.stdout.strip()
+    print(f"[merge] attempt {attempt} FAILED: {last_error}")
+    run("git merge --abort 2>/dev/null || true")
+    clear_stale_locks()
+    run(f"git checkout {sprint_branch}")
+
+    if attempt < MAX_RETRIES:
+        wait = 5 * attempt
+        print(f"[merge] retrying in {wait}s …")
+        time.sleep(wait)
+
+# All attempts exhausted
+print(f"[merge] FAILED after {MAX_RETRIES} attempts. Last error: {last_error}")
+update_run_state({
+    "needs_human": True,
+    "last_failure_reason": (
+        f"Sprint {sprint_n} PASSED but branch merge failed after {MAX_RETRIES} attempts. "
+        f"Last error: {last_error}. "
+        f"To recover: git checkout {base_branch} && git merge --no-ff {sprint_branch} && "
+        f"python3 -c \"import json,pathlib; d=json.loads(pathlib.Path('run-state.json').read_text()); "
+        f"d.update({{'needs_human':False,'active_branch':'{base_branch}','merge_retry_count':0}}); "
+        f"pathlib.Path('run-state.json').write_text(json.dumps(d,indent=2))\""
+    )
+})
+sys.exit(2)
+PY
+```
+
+If the script exits with code 2:
+- `needs_human=true` has already been written to `run-state.json`
+- **Stop. Do NOT proceed to Rule 6.**
+- Tell the user the exact recovery command printed above.
+
+**Recovery after a stale merge failure** — if `needs_human=true` and `last_failure_reason` mentions "branch merge failed":
+1. User runs the recovery commands printed in `last_failure_reason`.
+2. User manually sets `needs_human=false` in `run-state.json`.
+3. Orchestrator resumes from Rule 6 on the next run.
+
+---
+
 ### Dependency / toolchain upgrades
 
 Treat as `Type: minor_feature` (minor bump). The sprint contract success criteria
@@ -878,7 +1027,8 @@ PY
   "last_run_at": "2026-05-11T10:00:00Z",
   "current_version": "0.0.0",
   "sprint_origin": "feature | bugfix | minor_feature | major_feature | replan",
-  "quality_retry_count": 0
+  "quality_retry_count": 0,
+  "merge_retry_count": 0
 }
 ```
 

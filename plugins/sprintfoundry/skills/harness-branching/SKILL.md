@@ -85,13 +85,35 @@ When the next sprint starts:
 - do not reuse the previous sprint branch
 - update `run-state.json` to the new branch
 
-### 5. Merge readiness
+### 5. Merge readiness and execution
 
 A sprint branch is merge-ready only when:
 
 - the evaluator result for that sprint is `SPRINT PASS`
 - the branch still corresponds to the same sprint scope
 - there is no unresolved pause or escalation state
+
+Merge is executed automatically by the Orchestrator (Rule 2 SPRINT PASS handler) — not manually.
+
+**Merge command:**
+
+```bash
+git checkout <base_branch>
+git merge --no-ff <sprint_branch> -m "merge: sprint-N (<sprint_branch>) → <base_branch> after SPRINT PASS"
+```
+
+**Git lock recovery:** Before each merge attempt, remove stale lock files:
+
+```bash
+rm -f .git/index.lock .git/MERGE_HEAD .git/CHERRY_PICK_HEAD
+```
+
+These are left by crashed git processes and are safe to delete when no git operation is actively running.
+
+**Merge failure handling:**
+- Orchestrator retries up to 3 times (5 s / 10 s / 15 s backoff).
+- If all retries fail: `needs_human=true` is set in `run-state.json` with the exact recovery command.
+- Sprint code is NOT lost — it remains on the sprint branch until the merge is completed.
 
 If a sprint is re-planned instead of completed:
 
