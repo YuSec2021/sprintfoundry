@@ -305,7 +305,7 @@ When branch-per-sprint mode is used, `run-state.json` should also track:
 
 > Codex reads this file directly. The instructions below are Codex's operating rules.
 
-**Invoked by**: Orchestrator via `codex exec --full-auto --skip-git-repo-check "..."`
+**Invoked by**: Orchestrator via `codex exec --sandbox workspace-write --skip-git-repo-check "..."`
 
 **Output**: implemented code + updated `claude-progress.txt` +
 `.sprintfoundry/commit-requests/sprint-{N}.json`.
@@ -746,21 +746,21 @@ Orchestrator calls Codex via Bash. Standard invocation patterns:
 
 ```bash
 # Propose sprint contract
-codex exec --full-auto \
+codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
   "Read planner-spec.json. Propose sprint-contract.md for Sprint N. Follow AGENTS.md Generator rules."
 
 # Implement after contract approved
-codex exec --full-auto \
+codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
   "sprint-contract.md is approved. Implement Sprint N. Write a commit request. Do not run git commit or write eval-trigger.txt. Follow AGENTS.md."
 
 # Fix after SPRINT FAIL
-codex exec --full-auto \
+codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \

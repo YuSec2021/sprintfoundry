@@ -144,11 +144,11 @@ def codex_command(prompt: str) -> str:
     quoted_prompt = shlex.quote(prompt)
     version = codex_version_tuple()
     if version is not None and version >= CODEX_EXEC_MODERN_MIN_VERSION:
-        # --full-auto = --sandbox workspace-write (writes restricted to workspace).
+        # --sandbox workspace-write keeps writes restricted to the workspace.
         # Codex writes project files only; Orchestrator owns Git metadata.
         # shell_environment_policy.inherit=all keeps project-root/env hints available.
         return (
-            "codex exec --full-auto"
+            "codex exec --sandbox workspace-write"
             " -c 'sandbox_permissions=[\"disk-full-read-access\"]'"
             " -c 'shell_environment_policy.inherit=all'"
             f" --skip-git-repo-check {quoted_prompt}"

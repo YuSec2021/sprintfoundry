@@ -151,7 +151,7 @@ def test_codex_command_uses_modern_exec_when_version_is_new(monkeypatch) -> None
 
     monkeypatch.setattr(orchestrate, "codex_version_tuple", lambda: (0, 120, 0))
     command = orchestrate.codex_command("Implement sprint")
-    assert "codex exec --full-auto" in command
+    assert "codex exec --sandbox workspace-write" in command
     assert "disk-full-read-access" in command
     assert "shell_environment_policy.inherit=all" in command
     assert "--skip-git-repo-check" in command
@@ -179,7 +179,7 @@ def test_codex_command_quotes_prompt(monkeypatch) -> None:
     monkeypatch.setattr(orchestrate, "codex_version_tuple", lambda: (0, 120, 0))
     command = orchestrate.codex_command("Implement 'sprint' && rm -rf /")
     assert "Implement 'sprint' && rm -rf /" not in command
-    assert "codex exec --full-auto" in command
+    assert "codex exec --sandbox workspace-write" in command
     assert "--skip-git-repo-check" in command
 
 

@@ -52,7 +52,7 @@ autonomous-sprint-harness/
 | --- | --- | --- |
 | Orchestrator | **Plugin skill** `sprintfoundry-orchestrator` | Triggered by user |
 | Planner | Claude sub-agent | `Agent(subagent_type="planner", ...)` |
-| Generator | Codex CLI | `codex exec --full-auto ...` |
+| Generator | Codex CLI | `codex exec --sandbox workspace-write ...` |
 | Evaluator | Claude sub-agent | `Agent(subagent_type="evaluator", ...)` |
 
 Generator is always Codex CLI. Never invoke a Claude `generator` sub-agent.
@@ -130,7 +130,7 @@ Planner should include:
 ## Codex Commands
 
 ```bash
-codex exec --full-auto \
+codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \

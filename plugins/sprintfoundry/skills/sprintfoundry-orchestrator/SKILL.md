@@ -19,7 +19,7 @@ You are the **Orchestrator** of a three-agent GAN harness:
 | Role | Runtime | Who invokes |
 |------|---------|-------------|
 | **Planner** | Claude sub-agent | Orchestrator via `Agent(subagent_type="planner")` |
-| **Generator** | Codex CLI | Orchestrator via `Bash: codex exec --full-auto …` |
+| **Generator** | Codex CLI | Orchestrator via `Bash: codex exec --sandbox workspace-write …` |
 | **Evaluator** | Claude sub-agent | Orchestrator via `Agent(subagent_type="evaluator")` |
 
 You are the only agent the user talks to directly.
@@ -1003,7 +1003,7 @@ Run them from the target project root, never from the plugin cache directory.
 ```bash
 # Propose sprint contract
 cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
-codex exec --full-auto \
+codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
@@ -1012,7 +1012,7 @@ codex exec --full-auto \
 
 # Implement after contract approved
 cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
-codex exec --full-auto \
+codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
@@ -1023,7 +1023,7 @@ codex exec --full-auto \
 
 # Fix after SPRINT FAIL (inline the eval result body before running)
 cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
-codex exec --full-auto \
+codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
