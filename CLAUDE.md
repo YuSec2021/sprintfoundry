@@ -80,6 +80,7 @@ memory:
 ```bash
 cat run-state.json 2>/dev/null || echo "[no run-state]"
 cat claude-progress.txt 2>/dev/null || echo "[no progress]"
+cat scope-classification.json 2>/dev/null || echo "[no scope classification]"
 find .sprintfoundry/commit-requests -maxdepth 1 -name 'sprint-*.json' 2>/dev/null \
   || echo "[no commit requests]"
 cat eval-trigger.txt 2>/dev/null || echo "[no eval-trigger]"

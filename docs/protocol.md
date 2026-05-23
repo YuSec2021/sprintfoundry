@@ -66,6 +66,7 @@ State lives in files, never in conversation memory.
 
 | File | Owner | Purpose |
 |------|-------|---------|
+| `scope-classification.json` | Planner | Scale decision: `standard` or `large_system`, with evidence and epic outline |
 | `planner-spec.json` | Planner | Source of truth — product spec and sprint list |
 | `change-request.md` | User + Orchestrator | Classifies post-launch work as `bugfix`, `minor_feature`, `major_feature`, or `replan` |
 | `bug-report.md` | User + Orchestrator | Dedicated regression/defect intake used to create tightly scoped bugfix sprints |
@@ -246,26 +247,33 @@ When branch-per-sprint mode is used, `run-state.json` should also track:
 
 **Runs**: once per project, triggered by a new user prompt.
 
-**Output**: `planner-spec.json` + `init.sh` + initial entry in `claude-progress.txt`.
+**Output**: `scope-classification.json` + `planner-spec.json` + `init.sh` +
+initial entry in `claude-progress.txt`.
 
 ### Responsibilities
 
 1. Read any existing context (`claude-progress.txt`, `git log`) before starting.
-2. Turn the user prompt into a complete, ambitious product spec.
-3. Stay high-level — define *what* and *why*, never implementation details.
-4. Expand scope: target 12–20 features across 8–12 sprints.
-5. Embed a **Visual Design Language** section in the spec:
+2. Classify scope before planning:
+   - `standard`: MVP, focused tool, single domain, or fits 12-20 features and 8-12 sprints.
+   - `large_system`: architecture-heavy management system, 6+ modules, complex RBAC, approvals, audit, reporting, multi-tenant or multi-organization scope, or likely needs 20+ features / 12+ sprints.
+3. Write `scope-classification.json` with `planning_mode`, confidence, evidence signals, and, for `large_system`, a 4-10 epic outline.
+4. Turn the user prompt into a complete, ambitious product spec.
+5. Stay high-level — define *what* and *why*, never implementation details.
+6. Expand scope by mode:
+   - `standard`: target 12-20 features across 8-12 sprints.
+   - `large_system`: use Epic-first planning; define the broader epic roadmap, but expand only the first executable epic into 3-8 initial sprints.
+7. Embed a **Visual Design Language** section in the spec:
    - Color palette (3–5 tokens with hex values)
    - Typography: display font, body font, mono font
    - Spacing unit, border radius, mood adjective
-6. Choose a `verification.mode` for the project:
+8. Choose a `verification.mode` for the project:
    - `browser` for UI/web flows, verified with Playwright MCP
    - `api` for HTTP services, verified with real requests and response assertions
    - `cli` for command-line tools, verified with commands, exit codes, and output
    - `job` for queue/worker systems, verified by enqueueing work and checking side effects
    - `library` for packages, verified from an external consumer harness
-7. Identify opportunities for AI-native features.
-8. Write `init.sh` — starts the full dev stack (frontend + backend).
+9. Identify opportunities for AI-native features.
+10. Write `init.sh` — starts the full dev stack (frontend + backend).
    `init.sh` must satisfy the following contract:
    - **Idempotent**: safe to run twice in a row without side effects (kill existing
      processes before starting, skip already-installed dependencies, etc.).
@@ -275,11 +283,12 @@ When branch-per-sprint mode is used, `run-state.json` should also track:
      `timeout 60 <command> || { echo "step timed out"; exit 1; }`
    - **No silent swallowing**: do not use `|| true` unless the failure is provably
      non-blocking.
-9. Write `planner-spec.json`:
+11. Write `planner-spec.json`:
 
 ```json
 {
   "product": "string",
+  "planning_mode": "standard | large_system",
   "design_language": "full VDL description",
   "tech_stack": { "frontend": "...", "backend": "...", "db": "..." },
   "verification": {
@@ -288,8 +297,16 @@ When branch-per-sprint mode is used, `run-state.json` should also track:
     "command": "pytest -q"
   },
   "features": ["..."],
+  "epics": [
+    {
+      "id": "epic-1",
+      "title": "string",
+      "features": ["..."],
+      "status": "planned | expanded | skipped"
+    }
+  ],
   "sprints": [
-    { "id": 1, "title": "string", "features": ["..."] }
+    { "id": 1, "epic_id": "epic-1", "title": "string", "features": ["..."] }
   ]
 }
 ```
@@ -297,7 +314,8 @@ When branch-per-sprint mode is used, `run-state.json` should also track:
 ### Hard rules
 
 - Never write application code.
-- Stop after `planner-spec.json` is written. Report to user before handoff.
+- Stop after `scope-classification.json` and `planner-spec.json` are written.
+  Report the selected planning mode before handoff.
 
 ---
 

@@ -374,8 +374,10 @@ Historical gaps (informational findings) do **not** pause routing. They are note
         prompt="Project root: {SPRINTFOUNDRY_PROJECT_ROOT}
                 First run: cd {SPRINTFOUNDRY_PROJECT_ROOT}
                 Stop if pwd is not this project root.
-                New project: {user_prompt}. Write planner-spec.json, init.sh,
-                and initial claude-progress.txt in this project only.")
+                New project: {user_prompt}. First write scope-classification.json
+                with planning_mode=standard or large_system. Then write
+                planner-spec.json, init.sh, and initial claude-progress.txt in
+                this project only.")
 ```
 Read `references/planner-agent.md` first.
 

@@ -31,6 +31,7 @@ State lives on disk, not in chat memory.
 
 | File | Owner | Meaning |
 | --- | --- | --- |
+| `scope-classification.json` | Planner | Planning scale: `standard` or `large_system`, with evidence and epic outline. |
 | `planner-spec.json` | Planner | Product spec, sprint list, tech stack, verification mode. |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done. Must be approved before code. |
 | `sprint-fence.json` | Orchestrator | Authorized sprint number and base commit. |

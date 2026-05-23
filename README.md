@@ -61,7 +61,7 @@ SprintFoundry uses a strict separation of responsibility:
 
 | Role | Runtime | Responsibility |
 | --- | --- | --- |
-| Planner | Claude sub-agent | Turns a short user request into product direction, verification mode, and sprint plan |
+| Planner | Claude sub-agent | Classifies scope, then turns a request into product direction, verification mode, and sprint plan |
 | Generator | Codex CLI | Implements one approved sprint, self-checks, and writes a commit request |
 | Evaluator | Claude sub-agent + verification tools | Reviews contracts and verifies committed work through the configured external surface |
 | Orchestrator | `sprintfoundry-orchestrator` skill | Reads file state, invokes agents, owns Git commits and `eval-trigger.txt`, and pauses on unsafe state |
@@ -81,7 +81,8 @@ flowchart TD
     A["User request / continue sprint"] --> O["sprintfoundry-orchestrator"]
     O --> S["Read current file state"]
     S --> P{"planner-spec.json exists?"}
-    P -- no --> PL["Planner creates spec, init.sh, progress log"]
+    P -- no --> SC["Planner writes scope-classification.json"]
+    SC --> PL["Planner creates spec, init.sh, progress log"]
     P -- yes --> C{"sprint-contract.md exists?"}
     C -- no --> NC["Codex proposes next sprint contract"]
     C -- yes --> A1{"CONTRACT APPROVED?"}
@@ -100,6 +101,19 @@ flowchart TD
     F -- pause --> H["Human escalation"]
     V --> O
 ```
+
+## Planning Scale
+
+Before planning, SprintFoundry writes `scope-classification.json` with a
+`planning_mode`:
+
+| Mode | Use when | Initial decomposition |
+| --- | --- | --- |
+| `standard` | MVPs, focused tools, single-domain apps | 12-20 features across 8-12 sprints |
+| `large_system` | Large management systems, architecture docs, RBAC, approvals, audit, reports, multi-tenant or multi-org scope | 4-10 epics, then only the first executable epic is expanded into 3-8 initial sprints |
+
+This prevents large systems from being compressed into an imprecise 12-sprint
+plan while keeping smaller projects lightweight.
 
 ## Verification Modes
 
@@ -133,6 +147,7 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 
 | File | Owner | Purpose |
 | --- | --- | --- |
+| `scope-classification.json` | Planner | Scale decision: `standard` or `large_system`, with evidence and epic outline |
 | `planner-spec.json` | Planner | Product spec, design language, tech stack, verification mode, and sprint list |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint acceptance contract; code cannot start until approved |
 | `sprint-fence.json` | Orchestrator | Expected sprint number and base commit before implementation starts |

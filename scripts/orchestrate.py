@@ -655,7 +655,11 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
             rationale="planner-spec.json is missing at session start",
             mode="planning",
             current_sprint=0,
-            prompt=f"New project: {user_prompt}. Write planner-spec.json and init.sh.",
+            prompt=(
+                f"New project: {user_prompt}. First write scope-classification.json "
+                "with planning_mode=standard or large_system. Then write "
+                "planner-spec.json and init.sh."
+            ),
         )
 
     current_sprint = int(observed.get("current_sprint", 0) or 0)

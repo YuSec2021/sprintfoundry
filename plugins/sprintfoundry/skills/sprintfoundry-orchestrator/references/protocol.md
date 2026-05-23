@@ -10,6 +10,7 @@ State lives in files, never in conversation memory.
 
 | File | Owner | Purpose |
 |------|-------|---------|
+| `scope-classification.json` | Planner | Scale decision: `standard` or `large_system`, with evidence and epic outline |
 | `planner-spec.json` | Planner | Source of truth — product spec and sprint list |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done — deleted by Orchestrator after SPRINT PASS |
 | `.sprintfoundry/eval-results/eval-result-{N}.md` | Evaluator | Per-sprint scores and critique; kept out of the project root |

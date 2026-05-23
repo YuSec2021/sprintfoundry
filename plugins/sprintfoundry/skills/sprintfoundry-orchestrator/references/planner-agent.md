@@ -16,6 +16,7 @@ project specification for the Generator and Evaluator. Never write implementatio
 ```bash
 cat claude-progress.txt 2>/dev/null || echo "[no progress file]"
 git log --oneline -10   2>/dev/null || echo "[no git history]"
+cat scope-classification.json 2>/dev/null || echo "[no scope classification yet]"
 cat planner-spec.json   2>/dev/null || echo "[no planner spec yet]"
 ```
 
@@ -26,11 +27,64 @@ explicitly asks for a revision.
 
 ## Required outputs (new project)
 
-1. `planner-spec.json`
-2. `init.sh`
-3. `claude-progress.txt` initial handoff entry
+1. `scope-classification.json`
+2. `planner-spec.json`
+3. `init.sh`
+4. `claude-progress.txt` initial handoff entry
 
 Stop after these are written.
+
+---
+
+## Scope classification
+
+Before writing `planner-spec.json`, classify the request as `standard` or
+`large_system`.
+
+Use `standard` when the request is an MVP, a focused tool, a single business
+domain, or can fit in 12-20 features and 8-12 sprints.
+
+Use `large_system` when the input is an architecture document or management
+system with any strong large-system signals:
+
+- 6 or more business modules
+- multiple roles, organizations, tenants, or permission layers
+- approval workflows, audit trails, reporting, configuration centers, or complex RBAC
+- dense business rules or domain states
+- likely needs more than 20 features or more than 12 sprints
+
+Write `scope-classification.json`:
+
+```json
+{
+  "planning_mode": "standard | large_system",
+  "confidence": "low | medium | high",
+  "reason": "one concise paragraph explaining the classification",
+  "signals": ["module_count>=6", "rbac", "approval_workflow"],
+  "epics": [
+    {
+      "id": "epic-1",
+      "title": "Identity, tenancy, and RBAC",
+      "boundary": "what belongs here and what does not",
+      "risks": ["permission leakage"],
+      "dependencies": []
+    }
+  ],
+  "initial_expansion": {
+    "strategy": "all_sprints | first_epic_only",
+    "epic_id": "epic-1",
+    "target_sprints": 5
+  }
+}
+```
+
+For `standard`, `epics` may be empty and `initial_expansion.strategy` should be
+`all_sprints`.
+
+For `large_system`, use Epic-first planning: define 4-10 epics, then expand
+only the first executable epic into sprint entries. Leave later epics in
+`scope-classification.json` and the top-level product roadmap rather than
+forcing the whole system into one oversized sprint list.
 
 ---
 
@@ -39,6 +93,7 @@ Stop after these are written.
 ```json
 {
   "product": "string",
+  "planning_mode": "standard | large_system",
   "design_language": "full VDL description",
   "tech_stack": {
     "frontend": "...",
@@ -51,8 +106,16 @@ Stop after these are written.
     "command": "pytest -q"
   },
   "features": ["..."],
+  "epics": [
+    {
+      "id": "epic-1",
+      "title": "string",
+      "features": ["..."],
+      "status": "planned | expanded | skipped"
+    }
+  ],
   "sprints": [
-    { "id": 1, "title": "string", "features": ["..."] }
+    { "id": 1, "epic_id": "epic-1", "title": "string", "features": ["..."] }
   ]
 }
 ```
@@ -68,7 +131,9 @@ Stop after these are written.
 | `library` | Packages — external consumer harness |
 
 **Spec rules:**
-- Target 12–20 features across 8–12 sprints
+- `standard`: target 12-20 features across 8-12 sprints
+- `large_system`: target 4-10 epics and expand only the first executable epic
+  into 3-8 initial sprints; do not create a 40-sprint plan up front
 - Expand the user prompt — define what and why, not file paths or function names
 - Include a **Visual Design Language** with: color palette (3–5 hex tokens), display/body/mono fonts, spacing unit, border radius, one mood adjective
 - Look for AI-native product opportunities where they fit naturally

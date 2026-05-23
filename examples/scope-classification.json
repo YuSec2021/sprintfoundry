@@ -1,0 +1,42 @@
+{
+  "planning_mode": "large_system",
+  "confidence": "high",
+  "reason": "Detected a management-system scope with multiple business modules, RBAC, approval workflows, reporting, audit trails, and system configuration. The project should be planned as epics first instead of being compressed into a single 8-12 sprint list.",
+  "signals": [
+    "module_count>=6",
+    "rbac",
+    "approval_workflow",
+    "audit_trail",
+    "reporting",
+    "system_configuration"
+  ],
+  "epics": [
+    {
+      "id": "epic-1",
+      "title": "Identity, organizations, and RBAC",
+      "boundary": "User identity, organization structure, roles, permissions, and access policy enforcement. Excludes business workflow screens.",
+      "risks": [
+        "permission leakage",
+        "role model too coarse for later workflows"
+      ],
+      "dependencies": []
+    },
+    {
+      "id": "epic-2",
+      "title": "Core workflow and approvals",
+      "boundary": "Primary business records, lifecycle states, approval routing, and rejection/resubmission flows.",
+      "risks": [
+        "state machine drift",
+        "approval edge cases hidden in prose"
+      ],
+      "dependencies": [
+        "epic-1"
+      ]
+    }
+  ],
+  "initial_expansion": {
+    "strategy": "first_epic_only",
+    "epic_id": "epic-1",
+    "target_sprints": 5
+  }
+}
