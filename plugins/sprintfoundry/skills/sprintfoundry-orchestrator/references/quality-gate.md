@@ -14,7 +14,7 @@
 3. [各语言工具配置](#3-各语言工具配置)
 4. [覆盖率阈值](#4-覆盖率阈值)
 5. [安全审计](#5-安全审计)
-6. [quality-gate-N.md 格式](#6-quality-gate-nmd-格式)
+6. [.sprintfoundry/quality-gates/quality-gate-N.md 格式](#6-sprintfoundryquality-gatesquality-gate-nmd-格式)
 7. [失败处理](#7-失败处理)
 8. [Evaluator 如何使用质量门禁结果](#8-evaluator-如何使用质量门禁结果)
 
@@ -23,7 +23,7 @@
 ## 1. 在 Sprint 门控中的位置
 
 ```
-③ IMPLEMENT (Codex writes commit request; Orchestrator commits + writes eval-trigger.txt)
+③ IMPLEMENT (Codex writes commit request; Orchestrator commits + writes .sprintfoundry/eval-trigger.txt)
         │
         ▼
    Rule 2.1: QUALITY GATE  ◀── 新增阶段
@@ -43,11 +43,11 @@
 
 ## 2. 质量门禁脚本
 
-Orchestrator 在检测到 `eval-trigger.txt` 后、调用 Evaluator 前，运行此脚本：
+Orchestrator 在检测到 `.sprintfoundry/eval-trigger.txt` 后、调用 Evaluator 前，运行此脚本：
 
 ```bash
 python3 - <<'PY'
-import json, pathlib, subprocess, sys, re
+import json, pathlib, subprocess, sys, re, shutil
 
 spec = json.loads(pathlib.Path("planner-spec.json").read_text()) \
        if pathlib.Path("planner-spec.json").exists() else {}
@@ -61,9 +61,13 @@ def run(cmd, **kwargs):
     r = subprocess.run(cmd, shell=True, capture_output=True, text=True, **kwargs)
     return r.returncode, (r.stdout + r.stderr).strip()
 
+trigger_path = pathlib.Path(".sprintfoundry/eval-trigger.txt")
+if not trigger_path.exists():
+    trigger_path = pathlib.Path("eval-trigger.txt")  # legacy compatibility
+
 sprint_n = "?"
-if pathlib.Path("eval-trigger.txt").exists():
-    m = re.search(r"sprint=(\d+)", pathlib.Path("eval-trigger.txt").read_text())
+if trigger_path.exists():
+    m = re.search(r"sprint=(\d+)", trigger_path.read_text())
     sprint_n = m.group(1) if m else "?"
 
 # ── JavaScript / TypeScript ──────────────────────────────────────────────────
@@ -100,7 +104,7 @@ if not results:
     rc, out = run("git diff HEAD~1..HEAD --stat 2>&1")
     results["git-diff-stat"] = {"passed": True, "output": out}
 
-# 写结果文件
+# 写结果文件。新文件统一放在 .sprintfoundry/quality-gates/，避免污染项目根目录。
 passed_all = all(v["passed"] for v in results.values())
 lines = [f"# Quality Gate — Sprint {sprint_n}"]
 lines.append(f"\n**Verdict: {'PASS' if passed_all else 'FAIL'}**\n")
@@ -108,7 +112,13 @@ for tool, res in results.items():
     icon = "✅" if res["passed"] else "❌"
     lines.append(f"\n## {icon} {tool}\n```\n{res['output'][:800]}\n```")
 
-pathlib.Path(f"quality-gate-{sprint_n}.md").write_text("\n".join(lines))
+out_dir = pathlib.Path(".sprintfoundry") / "quality-gates"
+out_dir.mkdir(parents=True, exist_ok=True)
+for legacy in pathlib.Path(".").glob("quality-gate-*.md"):
+    target = out_dir / legacy.name
+    if not target.exists():
+        shutil.move(str(legacy), str(target))
+(out_dir / f"quality-gate-{sprint_n}.md").write_text("\n".join(lines))
 print("PASS" if passed_all else "FAIL")
 sys.exit(0 if passed_all else 1)
 PY
@@ -152,7 +162,7 @@ PY
 ### 其他栈
 
 若 `planner-spec.json` 中的 `tech_stack` 未覆盖以上两类，Orchestrator 记录
-`quality-gate-N.md` 为"栈未识别，跳过静态分析"，**不因此失败**，但 Evaluator
+`.sprintfoundry/quality-gates/quality-gate-N.md` 为"栈未识别，跳过静态分析"，**不因此失败**，但 Evaluator
 须在 Craft 评分中注记"缺少静态分析覆盖"并适当扣分。
 
 ---
@@ -165,7 +175,7 @@ PY
 | Sprint 4+ | 70% | 核心功能稳定后收紧 |
 | bugfix sprint | 80% | 修复代码必须有对应测试 |
 
-Sprint 编号从 `run-state.json.current_sprint` 读取。
+Sprint 编号从 `.sprintfoundry/run-state.json.current_sprint` 读取。
 阈值判断逻辑内嵌于质量门禁脚本：
 
 ```python
@@ -193,14 +203,14 @@ pip-audit --desc
 ### 失败处理
 安全漏洞失败 **不计入 quality_retry_count**——因为漏洞修复通常需要升级依赖，
 可能超出当前 sprint 范围。Orchestrator 应：
-1. 记录漏洞详情到 `quality-gate-N.md`
+1. 记录漏洞详情到 `.sprintfoundry/quality-gates/quality-gate-N.md`
 2. 自动生成 `change-request.md Type: minor_feature` 描述需要升级的包
 3. 将当前 sprint 标记为通过（漏洞单独处理）
-4. 在 `claude-progress.txt` 注记：`[SECURITY] Sprint N 遗留漏洞，已创建 change-request`
+4. 在 `.sprintfoundry/claude-progress.txt` 注记：`[SECURITY] Sprint N 遗留漏洞，已创建 change-request`
 
 ---
 
-## 6. quality-gate-N.md 格式
+## 6. .sprintfoundry/quality-gates/quality-gate-N.md 格式
 
 ```markdown
 # Quality Gate — Sprint {N}
@@ -247,13 +257,13 @@ Orchestrator 将此文件路径传递给 Evaluator，Evaluator 读取后纳入 C
 
 ```
 Sprint {N} 的代码质量检查失败。
-请阅读 quality-gate-{N}.md，修复所有标记为 ❌ 的问题：
+请阅读 .sprintfoundry/quality-gates/quality-gate-{N}.md，修复所有标记为 ❌ 的问题：
 - lint 错误：修复所有报告的代码风格和语法问题
 - 类型错误：补全缺失的类型标注，修复类型不匹配
 - 覆盖率不足：为未覆盖的分支补写单测
 不要修改已通过的功能逻辑，只修复质量问题。
 修复完成后写 .sprintfoundry/commit-requests/sprint-{N}.json，
-attempt 使用 "quality_retry"。不要运行 git commit，不要改 eval-trigger.txt。
+attempt 使用 "quality_retry"。不要运行 git commit，不要改 `.sprintfoundry/eval-trigger.txt`。
 STOP 后不要执行其他操作。
 ```
 
@@ -261,19 +271,22 @@ STOP 后不要执行其他操作。
 
 ```
 quality_retry_count > 2
-→ set run-state.json: mode="paused", needs_human=true
+→ set `.sprintfoundry/run-state.json`: mode="paused", needs_human=true
   last_failure_reason="quality gate failed after 2 retries — sprint {N}"
-  append to claude-progress.txt: "PAUSED: 质量门禁连续失败，需人工介入"
+  append to `.sprintfoundry/claude-progress.txt`: "PAUSED: 质量门禁连续失败，需人工介入"
 ```
 
 ---
 
 ## 8. Evaluator 如何使用质量门禁结果
 
-Evaluator 在 CHECK 阶段开始前读取 `quality-gate-{N}.md`（若存在）：
+Evaluator 在 CHECK 阶段开始前读取 `.sprintfoundry/quality-gates/quality-gate-{N}.md`（若存在）。
+质量门禁脚本会把旧版根目录 `quality-gate-*.md` 迁移到该目录；旧根目录读取仅作为迁移兼容兜底，新文件不得再写到项目根目录。
 
 ```bash
-cat quality-gate-{N}.md 2>/dev/null || echo "[no quality gate result]"
+cat .sprintfoundry/quality-gates/quality-gate-{N}.md 2>/dev/null \
+  || cat quality-gate-{N}.md 2>/dev/null \
+  || echo "[no quality gate result]"
 ```
 
 **Craft 评分影响规则：**
@@ -284,5 +297,5 @@ cat quality-gate-{N}.md 2>/dev/null || echo "[no quality gate result]"
 | PASS（部分工具跳过，栈未识别） | 记录"缺少静态分析"，Craft 上限降为 8/10 |
 | FAIL（不应发生，但若 Orchestrator 跳过了质量门禁） | Craft 直接 ≤ 5/10，注明"未经质量门禁" |
 
-Evaluator **不重新运行**静态分析工具——它信任 `quality-gate-N.md` 的结果，
+Evaluator **不重新运行**静态分析工具——它信任 quality gate 结果文件，
 只将其作为 Craft 评分的上下文输入。黑盒功能验证保持不变。

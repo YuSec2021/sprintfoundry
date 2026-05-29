@@ -11,7 +11,7 @@ when building prompts or debugging Codex output.
 ## Session startup (Codex does this automatically from AGENTS.md)
 
 ```bash
-cat claude-progress.txt   # read last handoff
+cat .sprintfoundry/claude-progress.txt   # read last handoff
 git log --oneline -10     # orient in history
 bash init.sh              # start dev server
 ```
@@ -52,7 +52,7 @@ If `sprint-contract.md` changes after this checksum (mismatch detected), stop an
 - Write tests alongside implementation — never after
 - No inline styles in React/frontend components
 - Do not carry forward abstractions unless required by current sprint
-- Check that implementation branch matches `run-state.json active_branch`
+- Check that implementation branch matches `.sprintfoundry/run-state.json active_branch`
 
 **Step 4a — 静态分析（强制，失败则不得请求 commit）**
 
@@ -81,7 +81,7 @@ npx jest --coverage --coverageThreshold='{"global":{"lines":THRESHOLD}}'
 python3 -m pytest --cov=. --cov-fail-under=THRESHOLD -q
 ```
 
-覆盖率阈值（读取 `run-state.json current_sprint` 和 `sprint_origin`）：
+覆盖率阈值（读取 `.sprintfoundry/run-state.json current_sprint` 和 `sprint_origin`）：
 - Sprint 1–3：50% · Sprint 4+：70% · bugfix sprint：80%
 
 覆盖率不达标时补写单测，不得降低阈值。
@@ -105,7 +105,7 @@ git diff --stat     # 确认变更范围未越界
 ### Step 5 — Commit request (Orchestrator owns Git)
 
 Codex may be unable to write `.git/index.lock` inside the sandbox. It must not
-run `git add`, `git commit`, or write `eval-trigger.txt`. Instead it prepares a
+run `git add`, `git commit`, or write `.sprintfoundry/eval-trigger.txt`. Instead it prepares a
 commit request:
 
 ```bash
@@ -122,13 +122,13 @@ cat > ".sprintfoundry/commit-requests/sprint-<N>.json" <<JSON
 }
 JSON
 rm -f sprint-contract.md.sha256
-echo "## Sprint <N> — $(date '+%Y-%m-%d %H:%M')" >> claude-progress.txt
-echo "Status: implementation ready, pending Orchestrator commit" >> claude-progress.txt
+echo "## Sprint <N> — $(date '+%Y-%m-%d %H:%M')" >> .sprintfoundry/claude-progress.txt
+echo "Status: implementation ready, pending Orchestrator commit" >> .sprintfoundry/claude-progress.txt
 ```
 
 **Stop immediately after writing the commit request and progress update.** Do
 not read `planner-spec.json` for the next sprint. Do not create a new branch.
-The Orchestrator commits, writes `eval-trigger.txt`, and advances routing.
+The Orchestrator commits, writes `.sprintfoundry/eval-trigger.txt`, and advances routing.
 
 ---
 
@@ -137,14 +137,14 @@ The Orchestrator commits, writes `eval-trigger.txt`, and advances routing.
 1. Read `.sprintfoundry/eval-results/eval-result-N.md` fully (Orchestrator inlines it into the prompt)
 2. Fix **only** what the Evaluator cited
 3. Write `.sprintfoundry/commit-requests/sprint-N.json` with `attempt: "retry"` and `commit_message: "fix(sprint-N): address evaluator failure"`
-4. Update `claude-progress.txt` with "pending Orchestrator commit"
+4. Update `.sprintfoundry/claude-progress.txt` with "pending Orchestrator commit"
 5. Stop immediately
 
 ---
 
-## sprint-fence.json
+## .sprintfoundry/sprint-fence.json
 
-Before implementation, the Orchestrator writes `sprint-fence.json`:
+Before implementation, the Orchestrator writes `.sprintfoundry/sprint-fence.json`:
 ```json
 { "sprint": N, "base_commit": "<sha>" }
 ```
@@ -167,7 +167,7 @@ If this file exists, Codex is authorised to implement **only** the sprint named 
 ```
 
 The Orchestrator confirms the active sprint branch before committing and writing
-`eval-trigger.txt`.
+`.sprintfoundry/eval-trigger.txt`.
 
 ---
 
@@ -178,8 +178,8 @@ The Orchestrator confirms the active sprint branch before committing and writing
 - Never begin coding before "CONTRACT APPROVED" is in `sprint-contract.md`
 - Never remove or modify existing tests
 - Never request a commit with failing tests
-- Never run `git add`, `git commit`, or write `eval-trigger.txt`
+- Never run `git add`, `git commit`, or write `.sprintfoundry/eval-trigger.txt`
 - Use `git revert` (not patches) to recover from broken state
-- Never write to `run-state.json`
+- Never write to `.sprintfoundry/run-state.json`
 - Never merge a sprint branch into `main` before Evaluator approval
 - Never start a new sprint on the previous sprint's branch

@@ -22,6 +22,7 @@ CONTRACT_APPROVED = "CONTRACT APPROVED"
 CODEX_EXEC_MODERN_MIN_VERSION = (0, 120, 0)
 HARNESS_DIR = ".sprintfoundry"
 EVAL_RESULTS_DIR = f"{HARNESS_DIR}/eval-results"
+LOGS_DIR = f"{HARNESS_DIR}/logs"
 
 
 def iso_now() -> str:
@@ -33,10 +34,12 @@ def read_text(path: Path) -> str:
 
 
 def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
 
 def append_ndjson(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
@@ -173,12 +176,12 @@ class RouteDecision:
     needs_human: bool = False
     last_failure_reason: str = ""
     cleanup_eval_trigger: bool = False
-    # When True, sprint-contract.md and sprint-fence.json are deleted so the
+    # When True, sprint-contract.md and .sprintfoundry/sprint-fence.json are deleted so the
     # next sprint must go through full contract negotiation before coding starts.
     cleanup_contract: bool = False
     # When True, eval-result-{current_sprint}.md is deleted *before* Codex runs
     # its retry. Without this the orchestrator loops on the stale FAIL verdict:
-    # a retry handoff that preserves eval-trigger.txt on the same sprint leaves the
+    # a retry handoff that preserves .sprintfoundry/eval-trigger.txt on the same sprint leaves the
     # file system indistinguishable from the pre-retry state, so every
     # subsequent round routes to `invoke_codex_for_retry` again while the
     # Evaluator never gets a chance to re-verify the fix. The retry prompt
@@ -192,7 +195,7 @@ class RouteDecision:
 
 @dataclass(frozen=True)
 class SprintAuditFinding:
-    """One inconsistency between declared state (run-state.json, progress log,
+    """One inconsistency between declared state (.sprintfoundry/run-state.json, progress log,
     git history) and the authoritative source (eval-result-{N}.md)."""
 
     kind: str
@@ -209,19 +212,19 @@ def audit_sprint_history(project: "HarnessProject") -> list[SprintAuditFinding]:
     The only authoritative signal that Sprint N is complete is:
         eval-result-{N}.md exists AND contains "SPRINT PASS"
 
-    Everything else (run-state.json.last_successful_sprint, claude-progress.txt,
+    Everything else (.sprintfoundry/run-state.json.last_successful_sprint, .sprintfoundry/claude-progress.txt,
     branch state) is derived state. This audit detects the historical failure
     modes seen in this repo:
 
       A. Sprint bootstrap bypass — Codex committed sprint code without ever
          going through contract/eval-trigger, so eval-result-{N}.md was never
          written even though later sprints proceeded.
-      B. Manual FAIL override — a human chore commit updated run-state.json
+      B. Manual FAIL override — a human chore commit updated .sprintfoundry/run-state.json
          to advance past a sprint whose eval-result still says SPRINT FAIL.
 
     Findings are *blocking*: the orchestrator must pause until a human either
     fixes the state (delete the stray later work / re-run Evaluator) or
-    explicitly acknowledges by editing run-state.json.needs_human back to false.
+    explicitly acknowledges by editing .sprintfoundry/run-state.json.needs_human back to false.
     """
     if not project.spec_path.exists():
         return []
@@ -253,14 +256,14 @@ def audit_sprint_history(project: "HarnessProject") -> list[SprintAuditFinding]:
         elif SPRINT_FAIL in text:
             failed_ids.add(sid)
 
-    # A. run-state.json claims higher success than eval-result files support.
+    # A. .sprintfoundry/run-state.json claims higher success than eval-result files support.
     if declared_last > 0 and declared_last not in passed_ids:
         findings.append(
             SprintAuditFinding(
                 kind="run_state_unsupported",
                 sprint=declared_last,
                 detail=(
-                    f"run-state.json says last_successful_sprint={declared_last} "
+                    f".sprintfoundry/run-state.json says last_successful_sprint={declared_last} "
                     f"but eval-result-{declared_last}.md is missing or does not "
                     f"contain SPRINT PASS"
                 ),
@@ -281,7 +284,7 @@ def audit_sprint_history(project: "HarnessProject") -> list[SprintAuditFinding]:
                         sprint=sid,
                         detail=(
                             f"eval-result-{sid}.md contains SPRINT FAIL but "
-                            f"run-state.json claims Sprint {declared_last} "
+                            f".sprintfoundry/run-state.json claims Sprint {declared_last} "
                             f"already succeeded; FAIL was never resolved by Evaluator"
                         ),
                     )
@@ -292,7 +295,7 @@ def audit_sprint_history(project: "HarnessProject") -> list[SprintAuditFinding]:
                         kind="evaluator_skipped",
                         sprint=sid,
                         detail=(
-                            f"eval-result-{sid}.md is missing but run-state.json "
+                            f"eval-result-{sid}.md is missing but .sprintfoundry/run-state.json "
                             f"claims Sprint {declared_last} already succeeded; "
                             f"Evaluator never ran for Sprint {sid}"
                         ),
@@ -344,29 +347,67 @@ def audit_sprint_history(project: "HarnessProject") -> list[SprintAuditFinding]:
 class HarnessProject:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
+        self.state_dir = self.root / HARNESS_DIR
+        self.logs_dir = self.root / LOGS_DIR
         self.spec_path = self.root / "planner-spec.json"
         self.contract_path = self.root / "sprint-contract.md"
-        self.eval_trigger_path = self.root / "eval-trigger.txt"
-        self.progress_path = self.root / "claude-progress.txt"
-        self.run_state_path = self.root / "run-state.json"
-        self.log_path = self.root / "orchestrator-log.ndjson"
-        self.events_path = self.root / "run-events.ndjson"
+        self.eval_trigger_path = self.state_dir / "eval-trigger.txt"
+        self.progress_path = self.state_dir / "claude-progress.txt"
+        self.run_state_path = self.state_dir / "run-state.json"
+        self.log_path = self.logs_dir / "orchestrator-log.ndjson"
+        self.events_path = self.logs_dir / "run-events.ndjson"
         # Single append-only forensic audit log — the authoritative timeline of
         # every harness operation. Unlike orchestrator-log/run-events (which
         # only capture orchestrator-internal decisions), this file also records
         # state transitions, git commits, hook allow/block outcomes, and manual
         # human annotations. Never rewritten, never truncated.
-        self.audit_path = self.root / "harness-audit.ndjson"
+        self.audit_path = self.state_dir / "harness-audit.ndjson"
+        self.scope_classification_path = self.state_dir / "scope-classification.json"
         self.change_request_path = self.root / "change-request.md"
         self.bug_report_path = self.root / "bug-report.md"
         # Sprint fence: records expected sprint + git HEAD at implementation start.
         # Acts like a page-protection entry — any commit outside the fenced sprint
         # triggers a boundary-violation pause instead of silently continuing.
-        self.sprint_fence_path = self.root / "sprint-fence.json"
+        self.sprint_fence_path = self.state_dir / "sprint-fence.json"
+        self.contract_tampered_path = self.state_dir / "contract-tampered.flag"
+        self._migrate_legacy_runtime_files()
+
+    def _migrate_legacy_runtime_files(self) -> None:
+        """Move legacy root-level machine state into .sprintfoundry/.
+
+        Human-facing control files such as planner-spec.json, sprint-contract.md,
+        change-request.md, and bug-report.md intentionally stay at the project
+        root for discoverability.
+        """
+        migrations = {
+            "run-state.json": self.run_state_path,
+            "eval-trigger.txt": self.eval_trigger_path,
+            "sprint-fence.json": self.sprint_fence_path,
+            "claude-progress.txt": self.progress_path,
+            "contract-tampered.flag": self.contract_tampered_path,
+            "harness-audit.ndjson": self.audit_path,
+            "orchestrator-log.ndjson": self.log_path,
+            "run-events.ndjson": self.events_path,
+            "scope-classification.json": self.scope_classification_path,
+        }
+        for legacy_name, target in migrations.items():
+            legacy = self.root / legacy_name
+            if not legacy.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists() and target.is_file():
+                if legacy.suffix == ".ndjson":
+                    existing = target.read_text(encoding="utf-8")
+                    incoming = legacy.read_text(encoding="utf-8")
+                    separator = "" if not existing or existing.endswith("\n") else "\n"
+                    target.write_text(existing + separator + incoming, encoding="utf-8")
+                legacy.unlink()
+            else:
+                legacy.rename(target)
 
     def append_audit(self, event: str, actor: str, payload: dict[str, Any] | None = None,
                      sprint: int | None = None) -> None:
-        """Append a single line to harness-audit.ndjson.
+        """Append a single line to .sprintfoundry/harness-audit.ndjson.
 
         Best-effort: audit logging must never break the orchestrator itself.
         Permission errors or disk-full conditions are swallowed silently so
@@ -488,7 +529,7 @@ class HarnessProject:
         """Write a fence file before Codex starts implementing a sprint.
 
         Analogous to marking a memory page read-only before a CoW fork:
-        any eval-trigger.txt that reports a *different* sprint number is
+        any .sprintfoundry/eval-trigger.txt that reports a *different* sprint number is
         treated as an out-of-bounds write and causes an immediate pause.
         """
         payload = {
@@ -602,12 +643,12 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
 
     if run_state.get("needs_human"):
         current_sprint = int(run_state.get("current_sprint", 0) or observed.get("current_sprint", 0) or 0)
-        reason = str(run_state.get("last_failure_reason") or "run-state.json has needs_human=true")
+        reason = str(run_state.get("last_failure_reason") or ".sprintfoundry/run-state.json has needs_human=true")
         return RouteDecision(
             rule="needs_human_set",
             action="pause_for_human",
             rationale=(
-                "run-state.json has needs_human=true; human action is required "
+                ".sprintfoundry/run-state.json has needs_human=true; human action is required "
                 "before the orchestrator may route another agent"
             ),
             mode="paused",
@@ -656,7 +697,7 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
             mode="planning",
             current_sprint=0,
             prompt=(
-                f"New project: {user_prompt}. First write scope-classification.json "
+                f"New project: {user_prompt}. First write .sprintfoundry/scope-classification.json "
                 "with planning_mode=standard or large_system. Then write "
                 "planner-spec.json and init.sh."
             ),
@@ -677,8 +718,8 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
                 rule="sprint_boundary_violation",
                 action="pause_for_human",
                 rationale=(
-                    f"eval-trigger.txt reports sprint {trigger_sprint} but "
-                    f"sprint-fence.json expected sprint {fence['sprint']} — "
+                    f".sprintfoundry/eval-trigger.txt reports sprint {trigger_sprint} but "
+                    f".sprintfoundry/sprint-fence.json expected sprint {fence['sprint']} — "
                     "possible multi-sprint drift detected"
                 ),
                 mode="paused",
@@ -698,11 +739,11 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
             return RouteDecision(
                 rule="eval_trigger_has_pass",
                 action="clear_eval_trigger_and_continue",
-                rationale="eval-trigger.txt exists but the sprint already has SPRINT PASS",
+                rationale=".sprintfoundry/eval-trigger.txt exists but the sprint already has SPRINT PASS",
                 mode="contract",
                 current_sprint=current_sprint,
                 cleanup_eval_trigger=True,
-                # Delete sprint-contract.md and sprint-fence.json so the next
+                # Delete sprint-contract.md and .sprintfoundry/sprint-fence.json so the next
                 # sprint cannot skip contract negotiation — same principle as
                 # clearing page-table write bits after a CoW copy completes.
                 cleanup_contract=True,
@@ -736,8 +777,8 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
                     f"{failed_body}\n"
                     f"=== end verdict ===\n\n"
                     f"Write .sprintfoundry/commit-requests/sprint-{trigger_sprint}.json "
-                    "with attempt='retry'. Do not run git commit or write eval-trigger.txt. "
-                    "STOP after updating claude-progress.txt. Do NOT advance to any later sprint. "
+                    "with attempt='retry'. Do not run git commit or write .sprintfoundry/eval-trigger.txt. "
+                    "STOP after updating .sprintfoundry/claude-progress.txt. Do NOT advance to any later sprint. "
                     "Follow AGENTS.md Generator rules."
                 ),
                 cleanup_eval_result=True,
@@ -748,7 +789,7 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
             rationale="generator signaled that sprint output is ready for live CHECK",
             mode="checking",
             current_sprint=trigger_sprint,
-            prompt=f"Run CHECK for Sprint {trigger_sprint}. Read sprint-contract.md and eval-trigger.txt.",
+            prompt=f"Run CHECK for Sprint {trigger_sprint}. Read sprint-contract.md and .sprintfoundry/eval-trigger.txt.",
         )
 
     if observed["has_contract"]:
@@ -762,8 +803,8 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
                 command=codex_command(
                     f"sprint-contract.md is approved. Implement Sprint {current_sprint} ONLY. "
                     f"Write .sprintfoundry/commit-requests/sprint-{current_sprint}.json "
-                    "for Orchestrator commit. Do not run git commit or write eval-trigger.txt. "
-                    "STOP IMMEDIATELY after updating claude-progress.txt. "
+                    "for Orchestrator commit. Do not run git commit or write .sprintfoundry/eval-trigger.txt. "
+                    "STOP IMMEDIATELY after updating .sprintfoundry/claude-progress.txt. "
                     f"Do NOT read planner-spec.json to find Sprint {current_sprint + 1} or any later sprint. "
                     "Do NOT create a new branch or implement any other sprint. "
                     "Follow AGENTS.md Generator rules."
@@ -979,7 +1020,7 @@ def log_decision(project: HarnessProject, decision: RouteDecision) -> None:
         "pause_for_human": "orchestrator_paused",
         "complete": "orchestrator_completed",
         "clear_eval_trigger_and_continue": "eval_trigger_cleaned",
-        # Emitted when eval-trigger.txt names a sprint that does not match the
+        # Emitted when .sprintfoundry/eval-trigger.txt names a sprint that does not match the
         # fenced sprint — indicates Codex drifted past its implementation boundary.
         "sprint_boundary_violation": "sprint_boundary_violated",
     }
@@ -1046,7 +1087,7 @@ def maybe_cleanup_sprint_artifacts(project: HarnessProject, decision: RouteDecis
                 path.unlink()
     if decision.cleanup_eval_result and decision.current_sprint:
         # Drop the stale FAIL verdict so the next orchestrator round sees
-        # eval-trigger.txt without any eval-result and routes to the
+        # .sprintfoundry/eval-trigger.txt without any eval-result and routes to the
         # Evaluator instead of another Codex retry. The retry prompt already
         # inlined the verdict body, so Codex does not need the file.
         for stale in (

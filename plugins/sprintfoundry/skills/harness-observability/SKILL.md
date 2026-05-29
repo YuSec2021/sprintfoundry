@@ -7,11 +7,11 @@ description: Maintain observability, unattended loop state, escalation summaries
 
 Use this skill when working on the Claude + Codex sprint harness and you need to:
 
-- create or update `run-state.json`
-- append `run-events.ndjson`
-- append `orchestrator-log.ndjson`
+- create or update `.sprintfoundry/run-state.json`
+- append `.sprintfoundry/logs/run-events.ndjson`
+- append `.sprintfoundry/logs/orchestrator-log.ndjson`
 - write or refresh `human-escalation.md`
-- compact `claude-progress.txt`
+- compact `.sprintfoundry/claude-progress.txt`
 - decide whether unattended execution should continue or pause
 
 This skill is for harness operations, not product code.
@@ -21,8 +21,8 @@ This skill is for harness operations, not product code.
 Read only the minimum needed:
 
 - `planner-spec.json`
-- `run-state.json` if present
-- `claude-progress.txt` if present
+- `.sprintfoundry/run-state.json` if present
+- `.sprintfoundry/claude-progress.txt` if present
 - `sprint-contract.md` if present
 - latest `.sprintfoundry/eval-results/eval-result-{N}.md` relevant to the current sprint
 
@@ -52,9 +52,9 @@ Determine:
 
 Prefer file artifacts over chat history.
 
-### 2. Update `run-state.json`
+### 2. Update `.sprintfoundry/run-state.json`
 
-Keep `run-state.json` minimal and machine-readable.
+Keep `.sprintfoundry/run-state.json` minimal and machine-readable.
 
 Always set or refresh:
 
@@ -73,7 +73,7 @@ If the system is blocked, set:
 
 ### 3. Append structured events
 
-Append one line per event to `run-events.ndjson`.
+Append one line per event to `.sprintfoundry/logs/run-events.ndjson`.
 
 Use one event per meaningful transition:
 
@@ -87,11 +87,11 @@ Use one event per meaningful transition:
 - pause
 - completion
 
-Do not rewrite history in `run-events.ndjson`; append only.
+Do not rewrite history in `.sprintfoundry/logs/run-events.ndjson`; append only.
 
 ### 4. Append routing audit entries
 
-Append one line per orchestrator decision to `orchestrator-log.ndjson`.
+Append one line per orchestrator decision to `.sprintfoundry/logs/orchestrator-log.ndjson`.
 
 Include:
 
@@ -114,7 +114,7 @@ Keep it short:
 - exact artifact files to inspect next
 - recommended human action
 
-### 6. Compact `claude-progress.txt`
+### 6. Compact `.sprintfoundry/claude-progress.txt`
 
 Keep:
 
@@ -135,23 +135,23 @@ Pause unattended execution instead of retrying forever when:
 
 When pausing:
 
-- update `run-state.json`
+- update `.sprintfoundry/run-state.json`
 - append pause events
 - write `human-escalation.md`
-- add a brief pause note to `claude-progress.txt`
+- add a brief pause note to `.sprintfoundry/claude-progress.txt`
 
 ## Output quality rules
 
 - Keep state files factual and compact
 - Separate machine-readable state from human-readable summaries
 - Never use chat history as the source of truth when artifact files disagree
-- Do not turn `claude-progress.txt` into an audit log
+- Do not turn `.sprintfoundry/claude-progress.txt` into an audit log
 - Do not silently continue after a pause condition is met
 
 ## File roles
 
-- `run-state.json`: current machine-readable state
-- `run-events.ndjson`: append-only system event stream
-- `orchestrator-log.ndjson`: append-only routing audit trail
+- `.sprintfoundry/run-state.json`: current machine-readable state
+- `.sprintfoundry/logs/run-events.ndjson`: append-only system event stream
+- `.sprintfoundry/logs/orchestrator-log.ndjson`: append-only routing audit trail
 - `human-escalation.md`: current human takeover summary
-- `claude-progress.txt`: compact rolling handoff only
+- `.sprintfoundry/claude-progress.txt`: compact rolling handoff only

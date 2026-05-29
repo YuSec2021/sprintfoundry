@@ -78,17 +78,17 @@ Do not proceed to CHECK until the contract is approved.
 ## Mode 2: CHECK Phase
 
 **Triggered by**: Orchestrator has committed Generator output and written
-`eval-trigger.txt`.
+`.sprintfoundry/eval-trigger.txt`.
 
 ### Preparation
 
 ```bash
 cat sprint-contract.md
-cat eval-trigger.txt   # may contain "sprint=N" (initial) or "sprint=N-retry" (retry)
+cat .sprintfoundry/eval-trigger.txt   # may contain "sprint=N" (initial) or "sprint=N-retry" (retry)
 bash init.sh
 ```
 
-`eval-trigger.txt` may contain either `sprint=N` or `sprint=N-retry`. In both
+`.sprintfoundry/eval-trigger.txt` may contain either `sprint=N` or `sprint=N-retry`. In both
 cases, N is the sprint number and you write (or overwrite)
 `.sprintfoundry/eval-results/eval-result-N.md`.
 The `-retry` suffix is metadata for the Orchestrator only; it does not affect
@@ -192,7 +192,7 @@ Write `.sprintfoundry/eval-results/eval-result-{N}.md` in this structure.
 Create `.sprintfoundry/eval-results/` first if needed. **Always overwrite the
 same file for both initial checks and retries** — there is no
 `eval-result-{N}-retry.md`.
-The eval-trigger.txt suffix (`sprint=N-retry`) signals a retry to the
+The `.sprintfoundry/eval-trigger.txt` suffix (`sprint=N-retry`) signals a retry to the
 Orchestrator, but the Evaluator's output file name never changes.
 
 ```markdown

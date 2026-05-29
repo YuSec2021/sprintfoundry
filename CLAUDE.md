@@ -29,7 +29,7 @@ autonomous-sprint-harness/
 │   │   └── generator.md
 │   └── skills/                   # Local dev skills (harness-branching, observability)
 ├── examples/                      # Example / template files for new projects
-│   ├── run-state.json
+│   ├── .sprintfoundry/run-state.json
 │   ├── planner-spec.json
 │   ├── sprint-contract.md
 │   ├── .sprintfoundry/eval-results/eval-result-1.md
@@ -78,12 +78,12 @@ At the start of a harness session, read current files instead of relying on
 memory:
 
 ```bash
-cat run-state.json 2>/dev/null || echo "[no run-state]"
-cat claude-progress.txt 2>/dev/null || echo "[no progress]"
-cat scope-classification.json 2>/dev/null || echo "[no scope classification]"
+cat .sprintfoundry/run-state.json 2>/dev/null || echo "[no run-state]"
+cat .sprintfoundry/claude-progress.txt 2>/dev/null || echo "[no progress]"
+cat .sprintfoundry/scope-classification.json 2>/dev/null || echo "[no scope classification]"
 find .sprintfoundry/commit-requests -maxdepth 1 -name 'sprint-*.json' 2>/dev/null \
   || echo "[no commit requests]"
-cat eval-trigger.txt 2>/dev/null || echo "[no eval-trigger]"
+cat .sprintfoundry/eval-trigger.txt 2>/dev/null || echo "[no eval-trigger]"
 cat sprint-contract.md 2>/dev/null | head -40 || echo "[no contract]"
 find .sprintfoundry/eval-results -maxdepth 1 -name 'eval-result-*.md' 2>/dev/null \
   || ls eval-result-*.md 2>/dev/null \
@@ -92,10 +92,10 @@ git branch --show-current 2>/dev/null || true
 git log --oneline -5 2>/dev/null || true
 ```
 
-If `run-state.json.needs_human` is true, stop and surface the pause reason.
+If `.sprintfoundry/run-state.json.needs_human` is true, stop and surface the pause reason.
 Do not route any agent until a human explicitly clears it.
 
-If `run-state.json.active_branch` is set and differs from the current Git
+If `.sprintfoundry/run-state.json.active_branch` is set and differs from the current Git
 branch, stop and resolve the branch mismatch before routing.
 
 ## Routing Order
@@ -105,8 +105,8 @@ Apply this order:
 1. `needs_human=true` → pause.
 2. Missing `planner-spec.json` → Planner creates spec, `init.sh`, progress log.
 3. Sprint-history audit inconsistent → pause.
-4. Commit request exists → Orchestrator validates, commits, writes `eval-trigger.txt`.
-5. `eval-trigger.txt` exists → Quality Gate → Evaluator CHECK or targeted Codex retry.
+4. Commit request exists → Orchestrator validates, commits, writes `.sprintfoundry/eval-trigger.txt`.
+5. `.sprintfoundry/eval-trigger.txt` exists → Quality Gate → Evaluator CHECK or targeted Codex retry.
 6. `sprint-contract.md` exists but unapproved → Evaluator contract review.
 7. Approved `sprint-contract.md` → prepare branch/fence, invoke Codex implementation.
 8. `bug-report.md` → Codex proposes bugfix contract.
@@ -142,9 +142,9 @@ codex exec --sandbox workspace-write \
 
 - Claude Planner/Evaluator/Orchestrator never write application code.
 - Codex Generator never evaluates itself.
-- Codex Generator never runs `git add`, `git commit`, or writes `eval-trigger.txt`; Orchestrator owns Git commits and triggers.
+- Codex Generator never runs `git add`, `git commit`, or writes `.sprintfoundry/eval-trigger.txt`; Orchestrator owns Git commits and triggers.
 - No code before `CONTRACT APPROVED`.
 - No sprint advancement without `SPRINT PASS`.
 - Do not clear `needs_human=true` automatically.
-- Do not rewrite `harness-audit.ndjson`.
+- Do not rewrite `.sprintfoundry/harness-audit.ndjson`.
 - Prefer pausing with a clear reason over silent autonomous drift.

@@ -8,7 +8,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "orchestrate.py"
+STATE_DIR = Path(".sprintfoundry")
 EVAL_RESULTS_DIR = Path(".sprintfoundry") / "eval-results"
+RUN_STATE = STATE_DIR / "run-state.json"
+EVAL_TRIGGER = STATE_DIR / "eval-trigger.txt"
+SPRINT_FENCE = STATE_DIR / "sprint-fence.json"
+AUDIT_LOG = STATE_DIR / "harness-audit.ndjson"
+ORCHESTRATOR_LOG = STATE_DIR / "logs" / "orchestrator-log.ndjson"
+RUN_EVENTS = STATE_DIR / "logs" / "run-events.ndjson"
 
 
 def run_orchestrator(project_dir: Path, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -31,7 +38,13 @@ def run_git(project_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def write_file(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
 
 
 def write_eval_result(project_dir: Path, sprint: int, body: str) -> Path:
@@ -60,6 +73,40 @@ def test_routes_to_planner_when_spec_missing(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert payload["rule"] == "no_spec_yet"
     assert payload["action"] == "invoke_planner"
+
+
+def test_migrates_legacy_runtime_files_into_hidden_state_dir(tmp_path: Path) -> None:
+    legacy_files = {
+        "run-state.json": (RUN_STATE, '{"current_sprint": 1, "needs_human": false}\n'),
+        "eval-trigger.txt": (EVAL_TRIGGER, "sprint=1\n"),
+        "sprint-fence.json": (SPRINT_FENCE, '{"sprint": 1}\n'),
+        "claude-progress.txt": (STATE_DIR / "claude-progress.txt", "handoff\n"),
+        "contract-tampered.flag": (STATE_DIR / "contract-tampered.flag", "tampered\n"),
+        "harness-audit.ndjson": (AUDIT_LOG, '{"event":"legacy"}\n'),
+        "orchestrator-log.ndjson": (ORCHESTRATOR_LOG, '{"event":"legacy"}\n'),
+        "run-events.ndjson": (RUN_EVENTS, '{"event":"legacy"}\n'),
+        "scope-classification.json": (STATE_DIR / "scope-classification.json", '{"planning_mode":"standard"}\n'),
+    }
+    for legacy_name, (_, content) in legacy_files.items():
+        write_file(tmp_path / legacy_name, content)
+    write_spec(tmp_path / "planner-spec.json")
+
+    result = run_orchestrator(tmp_path, "--json")
+
+    assert result.returncode == 0
+    for legacy_name, (target, content) in legacy_files.items():
+        assert not (tmp_path / legacy_name).exists()
+        migrated = (tmp_path / target)
+        assert migrated.exists()
+        if legacy_name == "run-state.json":
+            migrated_state = json.loads(migrated.read_text(encoding="utf-8"))
+            assert migrated_state["current_sprint"] == 1
+            assert migrated_state["needs_human"] is False
+            continue
+        if legacy_name in {"harness-audit.ndjson", "orchestrator-log.ndjson", "run-events.ndjson"}:
+            assert content.strip() in migrated.read_text(encoding="utf-8")
+            continue
+        assert migrated.read_text(encoding="utf-8") == content
 
 
 def test_routes_to_bugfix_contract_when_bug_report_exists(tmp_path: Path) -> None:
@@ -118,7 +165,7 @@ def test_needs_human_hard_stops_before_any_routing(tmp_path: Path) -> None:
     write_spec(tmp_path / "planner-spec.json")
     (tmp_path / "bug-report.md").write_text("# Bug\n\nActual: broken\n", encoding="utf-8")
     write_json(
-        tmp_path / "run-state.json",
+        tmp_path / RUN_STATE,
         {
             "mode": "paused",
             "current_sprint": 1,
@@ -135,7 +182,7 @@ def test_needs_human_hard_stops_before_any_routing(tmp_path: Path) -> None:
 
     result = run_orchestrator(tmp_path, "--json")
     payload = json.loads(result.stdout)
-    run_state = json.loads((tmp_path / "run-state.json").read_text(encoding="utf-8"))
+    run_state = json.loads((tmp_path / RUN_STATE).read_text(encoding="utf-8"))
 
     assert result.returncode == 2
     assert payload["rule"] == "needs_human_set"
@@ -256,11 +303,8 @@ def test_clears_contract_and_fence_after_sprint_pass(tmp_path: Path) -> None:
     (tmp_path / "sprint-contract.md").write_text(
         "## Sprint 1\nCONTRACT APPROVED\n", encoding="utf-8"
     )
-    (tmp_path / "sprint-fence.json").write_text(
-        '{"sprint": 1, "base_commit": "abc123", "started_at": "2026-01-01T00:00:00+00:00"}',
-        encoding="utf-8",
-    )
-    (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
+    write_file(tmp_path / SPRINT_FENCE, '{"sprint": 1, "base_commit": "abc123", "started_at": "2026-01-01T00:00:00+00:00"}')
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
     write_eval_result(tmp_path, 1, "## Verdict: SPRINT PASS\n")
 
     result = run_orchestrator(tmp_path, "--json")
@@ -269,7 +313,7 @@ def test_clears_contract_and_fence_after_sprint_pass(tmp_path: Path) -> None:
     assert not (tmp_path / "sprint-contract.md").exists(), (
         "sprint-contract.md must be deleted after SPRINT PASS"
     )
-    assert not (tmp_path / "sprint-fence.json").exists(), (
+    assert not (tmp_path / SPRINT_FENCE).exists(), (
         "sprint-fence.json must be deleted after SPRINT PASS"
     )
 
@@ -277,7 +321,7 @@ def test_clears_contract_and_fence_after_sprint_pass(tmp_path: Path) -> None:
 def test_legacy_root_eval_result_files_still_work(tmp_path: Path) -> None:
     """Existing projects may still have root-level eval-result files."""
     write_spec(tmp_path / "planner-spec.json")
-    (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
     (tmp_path / "eval-result-1.md").write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
 
     result = run_orchestrator(tmp_path, "--json")
@@ -315,12 +359,9 @@ def test_pauses_on_sprint_boundary_violation(tmp_path: Path) -> None:
         "## Sprint 1\nCONTRACT APPROVED\n", encoding="utf-8"
     )
     # Fence says sprint 1 was the authorised sprint ...
-    (tmp_path / "sprint-fence.json").write_text(
-        '{"sprint": 1, "base_commit": "abc123", "started_at": "2026-01-01T00:00:00+00:00"}',
-        encoding="utf-8",
-    )
+    write_file(tmp_path / SPRINT_FENCE, '{"sprint": 1, "base_commit": "abc123", "started_at": "2026-01-01T00:00:00+00:00"}')
     # ... but Codex wrote sprint=2, revealing it implemented two sprints at once
-    (tmp_path / "eval-trigger.txt").write_text("sprint=2", encoding="utf-8")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=2")
 
     result = run_orchestrator(tmp_path, "--json")
     assert result.returncode == 2, "Orchestrator must exit 2 (needs_human) on boundary violation"
@@ -339,7 +380,7 @@ def test_writes_sprint_fence_before_implementation(tmp_path: Path) -> None:
 
     run_orchestrator(tmp_path, "--json")
 
-    fence_path = tmp_path / "sprint-fence.json"
+    fence_path = tmp_path / SPRINT_FENCE
     assert fence_path.exists(), "sprint-fence.json must be written before Codex is invoked"
     fence = json.loads(fence_path.read_text(encoding="utf-8"))
     assert fence["sprint"] == 1
@@ -364,14 +405,14 @@ def test_implementation_routes_on_dedicated_sprint_branch(tmp_path: Path) -> Non
 
     result = run_orchestrator(tmp_path, "--json")
     payload = json.loads(result.stdout)
-    run_state = json.loads((tmp_path / "run-state.json").read_text(encoding="utf-8"))
+    run_state = json.loads((tmp_path / RUN_STATE).read_text(encoding="utf-8"))
     branch = run_git(tmp_path, "branch", "--show-current").stdout.strip()
 
     assert payload["action"] == "invoke_codex_for_implementation"
     assert branch == "codex/sprint-1-sprint-one"
     assert run_state["active_branch"] == "codex/sprint-1-sprint-one"
     assert run_state["base_branch"] == "main"
-    assert (tmp_path / "sprint-fence.json").exists()
+    assert (tmp_path / SPRINT_FENCE).exists()
 
 
 def test_implementation_prompt_includes_stop_instruction(tmp_path: Path) -> None:
@@ -400,11 +441,11 @@ def test_check_only_does_not_write_state_logs_or_fence(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert payload["action"] == "invoke_codex_for_implementation"
-    assert not (tmp_path / "run-state.json").exists()
-    assert not (tmp_path / "orchestrator-log.ndjson").exists()
-    assert not (tmp_path / "run-events.ndjson").exists()
-    assert not (tmp_path / "harness-audit.ndjson").exists()
-    assert not (tmp_path / "sprint-fence.json").exists()
+    assert not (tmp_path / RUN_STATE).exists()
+    assert not (tmp_path / ORCHESTRATOR_LOG).exists()
+    assert not (tmp_path / RUN_EVENTS).exists()
+    assert not (tmp_path / AUDIT_LOG).exists()
+    assert not (tmp_path / SPRINT_FENCE).exists()
 
 
 def test_pre_commit_uses_read_only_orchestrator_check() -> None:
@@ -435,11 +476,8 @@ def test_retry_deletes_stale_eval_result_so_evaluator_can_recheck(tmp_path: Path
     (tmp_path / "sprint-contract.md").write_text(
         "## Sprint 1\nCONTRACT APPROVED\n", encoding="utf-8"
     )
-    (tmp_path / "sprint-fence.json").write_text(
-        '{"sprint": 1, "base_commit": "abc123", "started_at": "2026-01-01T00:00:00+00:00"}',
-        encoding="utf-8",
-    )
-    (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
+    write_file(tmp_path / SPRINT_FENCE, '{"sprint": 1, "base_commit": "abc123", "started_at": "2026-01-01T00:00:00+00:00"}')
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
     eval_path = write_eval_result(
         tmp_path,
         1,
@@ -459,7 +497,7 @@ def test_retry_prompt_inlines_eval_result_fail_details(tmp_path: Path) -> None:
     """Because the stale eval-result is deleted before Codex runs, the retry
     prompt itself must carry every line Codex needs to fix."""
     write_spec(tmp_path / "planner-spec.json")
-    (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
     (tmp_path / "eval-result-1.md").write_text(
         "## Verdict: SPRINT FAIL\n\nRequired fixes:\n1. Add CTA button on /home\n",
         encoding="utf-8",
@@ -483,11 +521,8 @@ def test_next_round_after_retry_routes_to_evaluator(tmp_path: Path) -> None:
     (tmp_path / "sprint-contract.md").write_text(
         "## Sprint 1\nCONTRACT APPROVED\n", encoding="utf-8"
     )
-    (tmp_path / "sprint-fence.json").write_text(
-        '{"sprint": 1, "base_commit": "abc123", "started_at": "2026-01-01T00:00:00+00:00"}',
-        encoding="utf-8",
-    )
-    (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
+    write_file(tmp_path / SPRINT_FENCE, '{"sprint": 1, "base_commit": "abc123", "started_at": "2026-01-01T00:00:00+00:00"}')
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
     (tmp_path / "eval-result-1.md").write_text(
         "## Verdict: SPRINT FAIL\n\nFix: add button\n", encoding="utf-8"
     )
@@ -500,7 +535,7 @@ def test_next_round_after_retry_routes_to_evaluator(tmp_path: Path) -> None:
     # Simulate the retry commit handoff having completed: trigger is present
     # with the same sprint=1 content. eval-result-1.md is still
     # absent because the orchestrator deleted it before the Codex invocation.
-    (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
 
     # Round 2: must now route to Evaluator, NOT another Codex retry
     second = run_orchestrator(tmp_path, "--json")
@@ -510,7 +545,7 @@ def test_next_round_after_retry_routes_to_evaluator(tmp_path: Path) -> None:
         f"expected invoke_evaluator after Codex retry, got "
         f"{second_payload['action']} (rule={second_payload['rule']})"
     )
-    run_state = json.loads((tmp_path / "run-state.json").read_text(encoding="utf-8"))
+    run_state = json.loads((tmp_path / RUN_STATE).read_text(encoding="utf-8"))
     assert run_state["retry_count"] == 1, (
         "retry_count should still be 1 — invoking Evaluator must not consume "
         "another retry slot"
@@ -525,11 +560,8 @@ def test_retry_budget_exhausts_across_full_evaluator_retry_cycles(tmp_path: Path
     (tmp_path / "sprint-contract.md").write_text(
         "## Sprint 1\nCONTRACT APPROVED\n", encoding="utf-8"
     )
-    (tmp_path / "sprint-fence.json").write_text(
-        '{"sprint": 1, "base_commit": "abc123", "started_at": "2026-01-01T00:00:00+00:00"}',
-        encoding="utf-8",
-    )
-    (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
+    write_file(tmp_path / SPRINT_FENCE, '{"sprint": 1, "base_commit": "abc123", "started_at": "2026-01-01T00:00:00+00:00"}')
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
 
     def simulate_evaluator_fail() -> None:
         (tmp_path / "eval-result-1.md").write_text(
@@ -538,7 +570,7 @@ def test_retry_budget_exhausts_across_full_evaluator_retry_cycles(tmp_path: Path
 
     def simulate_codex_retry() -> None:
         # Retry handoff completes and eval-trigger.txt remains on the same sprint.
-        (tmp_path / "eval-trigger.txt").write_text("sprint=1", encoding="utf-8")
+        write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
 
     observed_retry_counts: list[int] = []
     observed_actions: list[str] = []
@@ -549,7 +581,7 @@ def test_retry_budget_exhausts_across_full_evaluator_retry_cycles(tmp_path: Path
         result = run_orchestrator(tmp_path, "--json")
         payload = json.loads(result.stdout)
         run_state = json.loads(
-            (tmp_path / "run-state.json").read_text(encoding="utf-8")
+            (tmp_path / RUN_STATE).read_text(encoding="utf-8")
         )
         observed_actions.append(payload["action"])
         observed_retry_counts.append(run_state["retry_count"])
@@ -630,7 +662,7 @@ def test_audit_detects_bootstrap_bypass(tmp_path: Path) -> None:
     (tmp_path / "eval-result-3.md").write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
     (tmp_path / "eval-result-4.md").write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
     write_json(
-        tmp_path / "run-state.json",
+        tmp_path / RUN_STATE,
         {
             "mode": "complete",
             "current_sprint": 4,
@@ -668,7 +700,7 @@ def test_audit_detects_fail_override(tmp_path: Path) -> None:
         "## Verdict: SPRINT PASS\n", encoding="utf-8"
     )
     write_json(
-        tmp_path / "run-state.json",
+        tmp_path / RUN_STATE,
         {
             "mode": "complete",
             "current_sprint": 4,
@@ -698,7 +730,7 @@ def test_audit_passes_for_clean_history(tmp_path: Path) -> None:
             "## Verdict: SPRINT PASS\n", encoding="utf-8"
         )
     write_json(
-        tmp_path / "run-state.json",
+        tmp_path / RUN_STATE,
         {
             "mode": "contract",
             "current_sprint": 4,
@@ -724,7 +756,7 @@ def test_audit_passes_for_clean_history(tmp_path: Path) -> None:
 # --- harness-audit.ndjson emission tests -------------------------------------
 
 def _load_audit(project_dir: Path) -> list[dict]:
-    path = project_dir / "harness-audit.ndjson"
+    path = project_dir / AUDIT_LOG
     if not path.exists():
         return []
     return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -760,7 +792,7 @@ def test_audit_log_emits_audit_finding_on_inconsistent_state(tmp_path: Path) -> 
         "## Verdict: SPRINT PASS\n", encoding="utf-8"
     )
     write_json(
-        tmp_path / "run-state.json",
+        tmp_path / RUN_STATE,
         {
             "mode": "complete",
             "current_sprint": 4,
@@ -795,7 +827,7 @@ def test_audit_log_emits_eval_result_observed_snapshot(tmp_path: Path) -> None:
             "## Verdict: SPRINT PASS\n", encoding="utf-8"
         )
     write_json(
-        tmp_path / "run-state.json",
+        tmp_path / RUN_STATE,
         {
             "mode": "complete",
             "current_sprint": 3,
@@ -866,7 +898,7 @@ def test_harness_log_cli_verify_highlights_gap(tmp_path: Path) -> None:
     # Sprint 3 FAIL but run-state declares Sprint 3 passed.
     (tmp_path / "eval-result-3.md").write_text("## Verdict: SPRINT FAIL\n", encoding="utf-8")
     write_json(
-        tmp_path / "run-state.json",
+        tmp_path / RUN_STATE,
         {
             "mode": "complete", "current_sprint": 3, "retry_count": 0,
             "last_successful_sprint": 3, "last_failure_reason": "",
@@ -899,7 +931,7 @@ def test_refuses_to_start_sprint_when_prior_not_passed(tmp_path: Path) -> None:
     (tmp_path / "eval-result-3.md").write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
     # run-state declares sprint 3 succeeded — this triggers the audit
     write_json(
-        tmp_path / "run-state.json",
+        tmp_path / RUN_STATE,
         {
             "mode": "contract",
             "current_sprint": 4,

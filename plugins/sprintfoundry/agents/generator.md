@@ -19,7 +19,7 @@ Claude subagent. This file exists as aligned documentation only.
 ## Session startup ritual
 
 ```bash
-cat claude-progress.txt 2>/dev/null || echo "[no progress file]"
+cat .sprintfoundry/claude-progress.txt 2>/dev/null || cat claude-progress.txt 2>/dev/null || echo "[no progress file]"
 git log --oneline -10 2>/dev/null || echo "[no git history]"
 bash init.sh
 ```
@@ -132,8 +132,9 @@ If the contract checksum fails mid-implementation, stop immediately — do **not
 request a commit. Signal the Orchestrator by writing a flag file:
 
 ```bash
+mkdir -p .sprintfoundry
 echo "sprint-contract.md modified after approval at $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  > contract-tampered.flag
+  > .sprintfoundry/contract-tampered.flag
 ```
 
 Then exit. The Orchestrator will detect this flag on its next routing pass
@@ -171,7 +172,7 @@ Also do a cleanup pass:
 ### Step 5 — Prepare commit request
 
 Codex runs inside a sandbox that may not be allowed to write `.git` metadata.
-Do **not** run `git add`, `git commit`, or write `eval-trigger.txt`. Instead,
+Do **not** run `git add`, `git commit`, or write `.sprintfoundry/eval-trigger.txt`. Instead,
 prepare a commit request for the Orchestrator.
 
 ```bash
@@ -202,29 +203,29 @@ rm -f sprint-contract.md.sha256
 
 ### Step 6 — Handoff to Orchestrator
 
-Update `claude-progress.txt` after the commit request exists. The Orchestrator
+Update `.sprintfoundry/claude-progress.txt` after the commit request exists. The Orchestrator
 will validate the request, commit on the active sprint branch, then write
-`eval-trigger.txt`.
+`.sprintfoundry/eval-trigger.txt`.
 
 ```bash
-echo "## Sprint <N> — $(date '+%Y-%m-%d %H:%M')" >> claude-progress.txt
-echo "Status: implementation ready, pending Orchestrator commit" >> claude-progress.txt
+echo "## Sprint <N> — $(date '+%Y-%m-%d %H:%M')" >> .sprintfoundry/claude-progress.txt
+echo "Status: implementation ready, pending Orchestrator commit" >> .sprintfoundry/claude-progress.txt
 
 # Post-append compression check — mandatory per AGENTS.md policy.
-LINE_COUNT=$(wc -l < claude-progress.txt)
-SPRINT_COUNT=$(grep -c "^## Sprint " claude-progress.txt 2>/dev/null || echo 0)
+LINE_COUNT=$(wc -l < .sprintfoundry/claude-progress.txt)
+SPRINT_COUNT=$(grep -c "^## Sprint " .sprintfoundry/claude-progress.txt 2>/dev/null || echo 0)
 if [ "$LINE_COUNT" -gt 60 ] || [ "$SPRINT_COUNT" -gt 3 ]; then
   python3 -c "
 import sys; sys.path.insert(0, '$(pwd)/scripts')
 from orchestrate import compress_progress
 from pathlib import Path
-compress_progress(Path('claude-progress.txt'))
-print('claude-progress.txt compressed.')
+compress_progress(Path('.sprintfoundry/claude-progress.txt'))
+print('.sprintfoundry/claude-progress.txt compressed.')
 "
 fi
 ```
 
-Keep `claude-progress.txt` compact by rewriting older entries into a short summary when needed.
+Keep `.sprintfoundry/claude-progress.txt` compact by rewriting older entries into a short summary when needed.
 
 Stop after the progress update. Do not inspect the next sprint.
 
@@ -258,8 +259,8 @@ JSON
 4. Update progress and stop:
 
 ```bash
-echo "## Sprint <N> retry — $(date '+%Y-%m-%d %H:%M')" >> claude-progress.txt
-echo "Status: retry ready, pending Orchestrator commit" >> claude-progress.txt
+echo "## Sprint <N> retry — $(date '+%Y-%m-%d %H:%M')" >> .sprintfoundry/claude-progress.txt
+echo "Status: retry ready, pending Orchestrator commit" >> .sprintfoundry/claude-progress.txt
 ```
 
 ---
@@ -268,11 +269,11 @@ echo "Status: retry ready, pending Orchestrator commit" >> claude-progress.txt
 
 - Evaluate your own sprint output
 - Write `SPRINT PASS` or `SPRINT FAIL`
-- Run `git add`, `git commit`, or write `eval-trigger.txt`
+- Run `git add`, `git commit`, or write `.sprintfoundry/eval-trigger.txt`
 - Start coding before `CONTRACT APPROVED`
 - Remove or modify existing tests
 - Commit with failing tests
 - Introduce a second planning/state system outside the agreed harness artifacts
-- Turn `claude-progress.txt` into a verbose transcript
+- Turn `.sprintfoundry/claude-progress.txt` into a verbose transcript
 - Preserve low-quality abstractions just because they exist in prior context
-- Write to `run-state.json` — retry counts and mode transitions are owned by the Orchestrator
+- Write to `.sprintfoundry/run-state.json` — retry counts and mode transitions are owned by the Orchestrator

@@ -26,7 +26,7 @@ You are the only agent the user talks to directly.
 You never write application code. You never evaluate sprint quality.
 You do own Git metadata operations: Codex may be sandboxed away from `.git`, so
 the Orchestrator validates commit requests, performs `git add`/`git commit`,
-and writes `eval-trigger.txt`.
+and writes `.sprintfoundry/eval-trigger.txt`.
 
 ---
 
@@ -49,7 +49,7 @@ At the start of every invocation, determine `SPRINTFOUNDRY_PROJECT_ROOT`:
 1. If the user gave an explicit project path, use that.
 2. Else use the current conversation/task working directory if it is inside a
    Git worktree or contains project artifacts such as `planner-spec.json`,
-   `run-state.json`, `MEMORY.md`, `.sprintfoundry/`, `AGENTS.md`, or `.git/`.
+   `.sprintfoundry/run-state.json`, `MEMORY.md`, `.sprintfoundry/`, `AGENTS.md`, or `.git/`.
 3. Else ask the user for the target project path and stop.
 
 Use this resolver:
@@ -85,7 +85,7 @@ def git_root(path: pathlib.Path) -> pathlib.Path | None:
 
 root = git_root(candidate)
 if root is None:
-    markers = ("planner-spec.json", "run-state.json", "MEMORY.md", ".sprintfoundry", "AGENTS.md", ".git")
+    markers = ("planner-spec.json", ".sprintfoundry/run-state.json", "MEMORY.md", ".sprintfoundry", "AGENTS.md", ".git")
     probe = candidate
     while True:
         if any((probe / marker).exists() for marker in markers):
@@ -126,7 +126,7 @@ Store the printed path mentally as `SPRINTFOUNDRY_PROJECT_ROOT`.
   `SPRINTFOUNDRY_PROJECT_ROOT` disagree, stop and surface the mismatch. Do not
   "helpfully" continue in the most recent project.
 - Store runtime state only under the target project (`.sprintfoundry/`,
-  `run-state.json`, `MEMORY.md`, `planner-spec.json`, etc.).
+  `.sprintfoundry/run-state.json`, `MEMORY.md`, `planner-spec.json`, etc.).
 
 This is what allows two independent projects to use SprintFoundry at the same
 time without sharing state through the plugin cache directory or a stale agent
@@ -155,9 +155,9 @@ Load these from `references/` when you need deep details:
 cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
 cat VERSION             2>/dev/null || echo "[no VERSION]"
 cat MEMORY.md           2>/dev/null | tail -15 || echo "[no MEMORY.md]"
-cat run-state.json      2>/dev/null || echo "[no run-state]"
-cat claude-progress.txt 2>/dev/null || echo "[no progress]"
-cat eval-trigger.txt    2>/dev/null || echo "[no eval-trigger]"
+cat .sprintfoundry/run-state.json      2>/dev/null || cat run-state.json 2>/dev/null || echo "[no run-state]"
+cat .sprintfoundry/claude-progress.txt 2>/dev/null || cat claude-progress.txt 2>/dev/null || echo "[no progress]"
+cat .sprintfoundry/eval-trigger.txt    2>/dev/null || cat eval-trigger.txt 2>/dev/null || echo "[no eval-trigger]"
 cat sprint-contract.md  2>/dev/null | head -5 || echo "[no contract]"
 find .sprintfoundry/eval-results -maxdepth 1 -name 'eval-result-*.md' 2>/dev/null \
   || ls eval-result-*.md 2>/dev/null \
@@ -218,7 +218,7 @@ All remaining shell snippets in this skill assume you have already run
 
 ```bash
 ACTUAL=$(git branch --show-current 2>/dev/null || echo "")
-RECORDED=$(python3 -c "import json,pathlib; d=json.loads(pathlib.Path('run-state.json').read_text()); print(d.get('active_branch',''))" 2>/dev/null || echo "")
+RECORDED=$(python3 -c "import json,pathlib; d=json.loads(pathlib.Path('.sprintfoundry/run-state.json').read_text()); print(d.get('active_branch',''))" 2>/dev/null || echo "")
 if [ -n "$RECORDED" ] && [ "$ACTUAL" != "$RECORDED" ]; then
   echo "BRANCH MISMATCH: run-state says '$RECORDED' but current branch is '$ACTUAL'"
 fi
@@ -231,12 +231,12 @@ If mismatch found: **stop and surface it to the user. Do not route.**
 ```bash
 python3 -c "
 import json, pathlib
-d = json.loads(pathlib.Path('run-state.json').read_text()) if pathlib.Path('run-state.json').exists() else {}
+d = json.loads(pathlib.Path('.sprintfoundry/run-state.json').read_text()) if pathlib.Path('.sprintfoundry/run-state.json').exists() else {}
 print(d.get('needs_human', False))
 "
 ```
 
-If `true`: show `human-escalation.md` (if present) and **stop. Do not route until a human explicitly edits `run-state.json`.**
+If `true`: show `human-escalation.md` (if present) and **stop. Do not route until a human explicitly edits `.sprintfoundry/run-state.json`.**
 
 ### Pending-merge recovery
 
@@ -246,7 +246,7 @@ After reading state, check whether a successful sprint is sitting unmerged:
 python3 - <<'PY'
 import json, pathlib, re
 
-rs = json.loads(pathlib.Path("run-state.json").read_text()) if pathlib.Path("run-state.json").exists() else {}
+rs = json.loads(pathlib.Path(".sprintfoundry/run-state.json").read_text()) if pathlib.Path(".sprintfoundry/run-state.json").exists() else {}
 active  = rs.get("active_branch", "")
 base    = rs.get("base_branch", "main")
 passed_n = int(rs.get("last_successful_sprint", 0) or 0)
@@ -274,7 +274,7 @@ If the warning fires, **run the Sprint Branch Merge script immediately** before 
 
 ### Progress hygiene
 
-Rewrite `claude-progress.txt` before routing if **any** of the following:
+Rewrite `.sprintfoundry/claude-progress.txt` before routing if **any** of the following:
 - More than 3 sprint entries
 - Exceeds 60 lines
 - Contains stack traces, dumps, or multi-paragraph narratives
@@ -299,8 +299,8 @@ import json, pathlib, sys
 
 spec = json.loads(pathlib.Path("planner-spec.json").read_text()) \
     if pathlib.Path("planner-spec.json").exists() else {"sprints": []}
-run_state = json.loads(pathlib.Path("run-state.json").read_text()) \
-    if pathlib.Path("run-state.json").exists() else {}
+run_state = json.loads(pathlib.Path(".sprintfoundry/run-state.json").read_text()) \
+    if pathlib.Path(".sprintfoundry/run-state.json").exists() else {}
 
 passed, failed = set(), set()
 paths = [
@@ -357,7 +357,7 @@ else:
 PY
 ```
 
-If audit fails (blocking findings): set `run-state.json` → `mode="paused"`, `needs_human=true`. **Stop routing.**
+If audit fails (blocking findings): set `.sprintfoundry/run-state.json` → `mode="paused"`, `needs_human=true`. **Stop routing.**
 
 Historical gaps (informational findings) do **not** pause routing. They are noted to the user but the harness continues from the sprint after `max(passed)`.
 
@@ -374,9 +374,9 @@ Historical gaps (informational findings) do **not** pause routing. They are note
         prompt="Project root: {SPRINTFOUNDRY_PROJECT_ROOT}
                 First run: cd {SPRINTFOUNDRY_PROJECT_ROOT}
                 Stop if pwd is not this project root.
-                New project: {user_prompt}. First write scope-classification.json
+                New project: {user_prompt}. First write .sprintfoundry/scope-classification.json
                 with planning_mode=standard or large_system. Then write
-                planner-spec.json, init.sh, and initial claude-progress.txt in
+                planner-spec.json, init.sh, and initial .sprintfoundry/claude-progress.txt in
                 this project only.")
 ```
 Read `references/planner-agent.md` first.
@@ -385,10 +385,10 @@ Read `references/planner-agent.md` first.
 
 Commit requests live at `.sprintfoundry/commit-requests/sprint-N.json`. They
 mean Codex finished implementation or a retry but did not touch `.git` or
-`eval-trigger.txt`.
+`.sprintfoundry/eval-trigger.txt`.
 
 Run this before Rule 2 so retries can be committed even while an old
-`eval-trigger.txt` is still present.
+`.sprintfoundry/eval-trigger.txt` is still present.
 
 ```bash
 python3 - <<'PY'
@@ -410,7 +410,9 @@ sprint = int(req["sprint"])
 attempt = req.get("attempt", "initial")
 msg = req.get("commit_message") or f"feat(sprint-{sprint}): implement sprint"
 
-rs_path = root / "run-state.json"
+rs_path = root / ".sprintfoundry" / "run-state.json"
+if not rs_path.exists():
+    rs_path = root / "run-state.json"  # legacy migration compatibility
 rs = json.loads(rs_path.read_text()) if rs_path.exists() else {}
 expected = int(rs.get("current_sprint", sprint))
 if sprint != expected:
@@ -448,7 +450,7 @@ else:
     subprocess.check_call(["git", "add", "-A"])
 
 # Never commit runtime handoff artifacts.
-subprocess.run(["git", "reset", "-q", "--", "eval-trigger.txt", "sprint-contract.md.sha256", ".sprintfoundry"], check=False)
+subprocess.run(["git", "reset", "-q", "--", ".sprintfoundry/eval-trigger.txt", "eval-trigger.txt", "sprint-contract.md.sha256", ".sprintfoundry"], check=False)
 
 staged = subprocess.run(["git", "diff", "--cached", "--quiet"])
 if staged.returncode == 0:
@@ -457,7 +459,8 @@ if staged.returncode == 0:
 
 subprocess.check_call(["git", "commit", "-m", msg])
 
-trigger = root / "eval-trigger.txt"
+trigger = root / ".sprintfoundry" / "eval-trigger.txt"
+trigger.parent.mkdir(parents=True, exist_ok=True)
 if attempt == "initial":
     trigger.write_text(f"sprint={sprint}\n")
 else:
@@ -472,20 +475,20 @@ PY
 If the script exits with code 2, pause with `needs_human=true` and surface the
 printed error. If it succeeds, continue routing from Rule 2.
 
-### Rule 2 — eval-trigger.txt exists (sprint committed, needs CHECK or retry)
+### Rule 2 — .sprintfoundry/eval-trigger.txt exists (sprint committed, needs CHECK or retry)
 
-Parse N from `eval-trigger.txt`:
+Parse N from `.sprintfoundry/eval-trigger.txt`:
 - `sprint=N` → initial attempt
 - `sprint=N-retry` → retry (same result file — evaluator always writes `.sprintfoundry/eval-results/eval-result-N.md`)
 
 ```
 IF .sprintfoundry/eval-results/eval-result-N.md contains "SPRINT PASS"
-  → rm eval-trigger.txt
+  → rm .sprintfoundry/eval-trigger.txt
     Run auto-version bump (see Auto-Version Policy below)
-    Append "Sprint N: PASS — {date} — {new_version}" to claude-progress.txt
-    Update run-state.json: last_successful_sprint=N, retry_count=0, current_version={new_version}
+    Append "Sprint N: PASS — {date} — {new_version}" to .sprintfoundry/claude-progress.txt
+    Update .sprintfoundry/run-state.json: last_successful_sprint=N, retry_count=0, current_version={new_version}
     → Run Sprint Branch Merge (see below)
-    → If merge succeeded: Update run-state.json: active_branch={base_branch}
+    → If merge succeeded: Update .sprintfoundry/run-state.json: active_branch={base_branch}
     → If merge failed: set needs_human=true, stop — do NOT proceed to Rule 6
     → Proceed to Rule 6
 
@@ -497,7 +500,7 @@ IF .sprintfoundry/eval-results/eval-result-N.md contains "SPRINT FAIL"
   ELSE IF retry_count > 2
     → pause: mode="paused", needs_human=true, last_failure_reason="max retries exceeded"
   ELSE
-    → increment run-state.json: retry_count += 1, last_run_at = now()
+    → increment .sprintfoundry/run-state.json: retry_count += 1, last_run_at = now()
       inline .sprintfoundry/eval-results/eval-result-N.md body into codex prompt
       delete .sprintfoundry/eval-results/eval-result-N.md
       → Codex retry (see commands below)
@@ -514,41 +517,43 @@ Read `references/quality-gate.md` for the full script and tool details.
 Run quality gate script (bash, ~30 seconds):
   → Detects tech stack from planner-spec.json
   → Runs lint, type-check, coverage, security audit
-  → Writes quality-gate-N.md
+  → Writes .sprintfoundry/quality-gates/quality-gate-N.md
 
-IF quality-gate-N.md Verdict is PASS
-  → Update run-state.json: quality_retry_count=0
+IF .sprintfoundry/quality-gates/quality-gate-N.md Verdict is PASS
+  → Update .sprintfoundry/run-state.json: quality_retry_count=0
   → Agent(subagent_type="evaluator",
           prompt="Project root: {SPRINTFOUNDRY_PROJECT_ROOT}
                   First run: cd {SPRINTFOUNDRY_PROJECT_ROOT}
                   Stop if pwd is not this project root.
-                  Run CHECK for Sprint N. Read sprint-contract.md, eval-trigger.txt,
-                  and quality-gate-N.md. Use quality-gate-N.md for Craft scoring.")
+                  Run CHECK for Sprint N. Read sprint-contract.md, .sprintfoundry/eval-trigger.txt,
+                  and .sprintfoundry/quality-gates/quality-gate-N.md.
+                  Use the quality gate file for Craft scoring.")
     Read references/evaluator-agent.md first.
 
-IF quality-gate-N.md Verdict is FAIL
+IF .sprintfoundry/quality-gates/quality-gate-N.md Verdict is FAIL
   IF quality_retry_count > 2
     → pause: mode="paused", needs_human=true,
              last_failure_reason="quality gate failed after 2 retries"
   ELSE
-    → increment run-state.json: quality_retry_count += 1
-      → Codex: "Sprint N quality gate failed. Read quality-gate-N.md.
+    → increment .sprintfoundry/run-state.json: quality_retry_count += 1
+      → Codex: "Sprint N quality gate failed. Read .sprintfoundry/quality-gates/quality-gate-N.md.
                 Fix ONLY the ❌ items (lint errors, type errors, coverage gaps).
                 Do not change functional logic. Write
                 .sprintfoundry/commit-requests/sprint-N.json with
                 attempt='quality_retry'. Do not run git commit or edit
-                eval-trigger.txt. STOP after updating claude-progress.txt."
+                .sprintfoundry/eval-trigger.txt. STOP after updating
+                .sprintfoundry/claude-progress.txt."
       (Loop back to Rule 2.1 on next Orchestrator run)
 ```
 
 ### Rule 2.5 — Contract tampered mid-sprint
 ```
-IF sprint-contract.md exists AND eval-trigger.txt absent
+IF sprint-contract.md exists AND .sprintfoundry/eval-trigger.txt absent
    AND sprint-contract.md contains "CONTRACT APPROVED"
-   AND contract-tampered.flag exists
+   AND .sprintfoundry/contract-tampered.flag exists
   → pause: mode="paused", needs_human=true,
            last_failure_reason="sprint-contract.md modified after approval"
-    Delete contract-tampered.flag. Stop.
+    Delete .sprintfoundry/contract-tampered.flag. Stop.
 ```
 
 ### Rule 3 — sprint-contract.md exists, no eval-trigger (contract phase)
@@ -565,7 +570,7 @@ ELSE
 
 ### Rule 4 — bug-report.md exists
 ```
-→ Update run-state.json: sprint_origin="bugfix"
+→ Update .sprintfoundry/run-state.json: sprint_origin="bugfix"
   Codex: "Read planner-spec.json and bug-report.md. Propose sprint-contract.md for a bugfix sprint.
           Add the new sprint entry to planner-spec.json with
             id = max(all existing sprint IDs in planner-spec.json) + 1
@@ -583,7 +588,7 @@ Read `references/version-updates.md` for full step-by-step details on each path.
 
 #### Type: bugfix
 ```
-→ Update run-state.json: sprint_origin="bugfix"
+→ Update .sprintfoundry/run-state.json: sprint_origin="bugfix"
   Codex: "Read planner-spec.json and change-request.md.
           Propose sprint-contract.md for a bugfix sprint.
           Add the new sprint entry to planner-spec.json with
@@ -597,7 +602,7 @@ Read `references/version-updates.md` for full step-by-step details on each path.
 #### Type: minor_feature
 A bounded iteration — scope fits in one sprint, no spec restructuring needed.
 ```
-→ Update run-state.json: sprint_origin="minor_feature"
+→ Update .sprintfoundry/run-state.json: sprint_origin="minor_feature"
   Codex: "Read planner-spec.json and change-request.md.
           Add a new sprint entry to planner-spec.json for this feature with
             id = max(all existing sprint IDs in planner-spec.json) + 1
@@ -612,7 +617,7 @@ A bounded iteration — scope fits in one sprint, no spec restructuring needed.
 Scope requires new sprints to be added to the product plan before coding begins.
 ```
 1. Read references/planner-agent.md.
-2. Update run-state.json: sprint_origin="major_feature"
+2. Update .sprintfoundry/run-state.json: sprint_origin="major_feature"
 3. → Agent(subagent_type="planner",
            prompt="Project root: {SPRINTFOUNDRY_PROJECT_ROOT}
                    First run: cd {SPRINTFOUNDRY_PROJECT_ROOT}
@@ -630,7 +635,7 @@ Scope requires new sprints to be added to the product plan before coding begins.
 Full product direction change — Planner substantially rewrites the spec.
 ```
 1. Read references/version-updates.md (replan section) before proceeding.
-2. Update run-state.json: sprint_origin="replan"
+2. Update .sprintfoundry/run-state.json: sprint_origin="replan"
 3. → Agent(subagent_type="planner",
            prompt="Project root: {SPRINTFOUNDRY_PROJECT_ROOT}
                    First run: cd {SPRINTFOUNDRY_PROJECT_ROOT}
@@ -673,17 +678,17 @@ IF all sprints have SPRINT PASS → Rule 7
 ELSE
   Before invoking Codex, create/switch sprint branch:
     branch = "codex/sprint-<N>-<slug>"
-    Update run-state.json: active_branch, base_branch, current_sprint
+    Update .sprintfoundry/run-state.json: active_branch, base_branch, current_sprint
     IF sprint_origin is not already set for this sprint (i.e. came from planner-spec.json directly):
-      Update run-state.json: sprint_origin="feature"
+      Update .sprintfoundry/run-state.json: sprint_origin="feature"
   → Codex: "Read planner-spec.json. Propose sprint-contract.md for Sprint N.
              Follow AGENTS.md Generator rules. Stop after writing the file."
 ```
 
 ### Rule 7 — All sprints complete
 ```
-→ Update run-state.json: mode="complete", needs_human=false
-  Report to user. Summarise claude-progress.txt. Ask for next feature.
+→ Update .sprintfoundry/run-state.json: mode="complete", needs_human=false
+  Report to user. Summarise .sprintfoundry/claude-progress.txt. Ask for next feature.
 ```
 
 ---
@@ -715,7 +720,7 @@ before any other cleanup. No human input required.
 ### Decision rules (evaluated in order, first match wins)
 
 **→ Major bump (X+1.0.0)** if any of:
-- `run-state.json sprint_origin` is `"major_feature"` or `"replan"`
+- `.sprintfoundry/run-state.json sprint_origin` is `"major_feature"` or `"replan"`
 - `sprint-contract.md` contains any of: `breaking`, `remove `, `replace `, `deprecate`, `migrate`, `incompatible`
 - `.sprintfoundry/eval-results/eval-result-N.md` contains `ARCHITECTURE DRIFT DETECTED`
 - Any sprint in `planner-spec.json` was newly marked `skipped: true` since the last bump
@@ -732,13 +737,13 @@ before any other cleanup. No human input required.
 python3 - <<'PY'
 import json, pathlib, re, subprocess, sys
 
-rs_path = pathlib.Path("run-state.json")
+rs_path = pathlib.Path(".sprintfoundry/run-state.json")
 run_state = json.loads(rs_path.read_text()) if rs_path.exists() else {}
 origin = run_state.get("sprint_origin", "feature")
 
 # VERSION file is the primary machine-readable version source — never trust
-# run-state.json alone. MEMORY.md is a recovery fallback if VERSION is missing.
-# run-state.json.current_version can drift when re-processing historical sprints.
+# .sprintfoundry/run-state.json alone. MEMORY.md is a recovery fallback if VERSION is missing.
+# .sprintfoundry/run-state.json.current_version can drift when re-processing historical sprints.
 version_file = pathlib.Path("VERSION")
 if version_file.exists():
     current = version_file.read_text().strip().lstrip("v") or "0.0.0"
@@ -869,7 +874,7 @@ Merge the sprint branch into `base_branch` (usually `main`) with full retry + gi
 python3 - <<'PY'
 import json, pathlib, subprocess, sys, time
 
-rs_path = pathlib.Path("run-state.json")
+rs_path = pathlib.Path(".sprintfoundry/run-state.json")
 rs = json.loads(rs_path.read_text()) if rs_path.exists() else {}
 sprint_branch = rs.get("active_branch", "")
 base_branch   = rs.get("base_branch", "main")
@@ -952,9 +957,9 @@ update_run_state({
         f"Sprint {sprint_n} PASSED but branch merge failed after {MAX_RETRIES} attempts. "
         f"Last error: {last_error}. "
         f"To recover: git checkout {base_branch} && git merge --no-ff {sprint_branch} && "
-        f"python3 -c \"import json,pathlib; d=json.loads(pathlib.Path('run-state.json').read_text()); "
+        f"python3 -c \"import json,pathlib; d=json.loads(pathlib.Path('.sprintfoundry/run-state.json').read_text()); "
         f"d.update({{'needs_human':False,'active_branch':'{base_branch}','merge_retry_count':0}}); "
-        f"pathlib.Path('run-state.json').write_text(json.dumps(d,indent=2))\""
+        f"pathlib.Path('.sprintfoundry/run-state.json').write_text(json.dumps(d,indent=2))\""
     )
 })
 sys.exit(2)
@@ -962,13 +967,13 @@ PY
 ```
 
 If the script exits with code 2:
-- `needs_human=true` has already been written to `run-state.json`
+- `needs_human=true` has already been written to `.sprintfoundry/run-state.json`
 - **Stop. Do NOT proceed to Rule 6.**
 - Tell the user the exact recovery command printed above.
 
 **Recovery after a stale merge failure** — if `needs_human=true` and `last_failure_reason` mentions "branch merge failed":
 1. User runs the recovery commands printed in `last_failure_reason`.
-2. User manually sets `needs_human=false` in `run-state.json`.
+2. User manually sets `needs_human=false` in `.sprintfoundry/run-state.json`.
 3. Orchestrator resumes from Rule 6 on the next run.
 
 ---
@@ -1019,9 +1024,9 @@ codex exec --sandbox workspace-write \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
   "sprint-contract.md is approved. Implement Sprint N ONLY.
-   Do not run git add, git commit, or write eval-trigger.txt.
+   Do not run git add, git commit, or write .sprintfoundry/eval-trigger.txt.
    Write .sprintfoundry/commit-requests/sprint-N.json for Orchestrator commit.
-   STOP IMMEDIATELY after updating claude-progress.txt. Follow AGENTS.md."
+   STOP IMMEDIATELY after updating .sprintfoundry/claude-progress.txt. Follow AGENTS.md."
 
 # Fix after SPRINT FAIL (inline the eval result body before running)
 cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
@@ -1030,9 +1035,9 @@ codex exec --sandbox workspace-write \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
   "Sprint N failed. Fix ONLY the cited issues from the inlined Evaluator verdict below.
-   Do not run git add, git commit, or write eval-trigger.txt.
+   Do not run git add, git commit, or write .sprintfoundry/eval-trigger.txt.
    Write .sprintfoundry/commit-requests/sprint-N.json with attempt='retry'.
-   STOP after updating claude-progress.txt. Follow AGENTS.md.
+   STOP after updating .sprintfoundry/claude-progress.txt. Follow AGENTS.md.
    --- EVALUATOR VERDICT ---
    {paste .sprintfoundry/eval-results/eval-result-N.md body here}"
 ```
@@ -1044,7 +1049,7 @@ codex exec --sandbox workspace-write \
 
 ## MEMORY.md — Sprint Ledger
 
-`MEMORY.md` is the **ledger for sprint history and recovery metadata**. It survives context resets, session restarts, and run-state.json drift.
+`MEMORY.md` is the **ledger for sprint history and recovery metadata**. It survives context resets, session restarts, and .sprintfoundry/run-state.json drift.
 
 - Ledger rows are append-only.
 - Footer metadata (`## Latest version:` and `## Max sprint ID:`) may be regenerated by the Orchestrator.
@@ -1112,7 +1117,7 @@ PY
 
 ---
 
-## run-state.json schema
+## .sprintfoundry/run-state.json schema
 
 ```json
 {
@@ -1136,7 +1141,7 @@ PY
 `sprint_origin` — set by Orchestrator at the moment a sprint is initiated (Rule 4/5/6); used to decide the version bump level.
 
 Ownership:
-- **Only the Orchestrator writes `run-state.json`.**
+- **Only the Orchestrator writes `.sprintfoundry/run-state.json`.**
 - Generator (Codex) must never write to it.
 - Evaluator must never write to it.
 - `needs_human` can only be cleared by a human edit OR by Rule 7 (all complete).
@@ -1167,7 +1172,7 @@ Never infer state from conversation history alone.
 - Never skip the startup state-read.
 - Never invoke `Agent(subagent_type="generator")` — Generator is always Codex via Bash.
 - Never advance the sprint counter without a `SPRINT PASS` in `.sprintfoundry/eval-results/eval-result-N.md`.
-- Never rewrite `harness-audit.ndjson` — it is append-only.
+- Never rewrite `.sprintfoundry/harness-audit.ndjson` — it is append-only.
 - Never operate from the plugin cache/base directory. Resolve
   `SPRINTFOUNDRY_PROJECT_ROOT` first, `cd` there, and stop on any project-root
   mismatch.

@@ -8,7 +8,7 @@ short and operational. Full background lives in `docs/protocol.md`.
 | Agent | Runtime | Responsibility |
 | --- | --- | --- |
 | Orchestrator | **Plugin skill** `sprintfoundry-orchestrator` | Routes by file state; entry point for all user requests. |
-| Planner | Claude sub-agent | Writes `planner-spec.json`, `init.sh`, and initial `claude-progress.txt`. |
+| Planner | Claude sub-agent | Writes `planner-spec.json`, `init.sh`, and initial `.sprintfoundry/claude-progress.txt`. |
 | Generator | Codex CLI | Implements exactly one approved sprint and writes a commit request. |
 | Evaluator | Claude sub-agent | Reviews contracts and runs independent black-box CHECK. |
 
@@ -18,7 +18,7 @@ Generator is always Codex CLI via Bash — never a Claude sub-agent.
 
 The gate rule: Generator never writes `SPRINT PASS` or `SPRINT FAIL`. Only the
 Evaluator writes `.sprintfoundry/eval-results/eval-result-{N}.md`.
-Git rule: Generator never writes Git metadata, commits, or `eval-trigger.txt`.
+Git rule: Generator never writes Git metadata, commits, or `.sprintfoundry/eval-trigger.txt`.
 The Orchestrator owns `git add`, `git commit`, and trigger creation after it
 validates the Generator's commit request.
 
@@ -31,18 +31,19 @@ State lives on disk, not in chat memory.
 
 | File | Owner | Meaning |
 | --- | --- | --- |
-| `scope-classification.json` | Planner | Planning scale: `standard` or `large_system`, with evidence and epic outline. |
+| `.sprintfoundry/scope-classification.json` | Planner | Planning scale: `standard` or `large_system`, with evidence and epic outline. |
 | `planner-spec.json` | Planner | Product spec, sprint list, tech stack, verification mode. |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done. Must be approved before code. |
-| `sprint-fence.json` | Orchestrator | Authorized sprint number and base commit. |
+| `.sprintfoundry/sprint-fence.json` | Orchestrator | Authorized sprint number and base commit. |
 | `.sprintfoundry/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation. |
-| `eval-trigger.txt` | Orchestrator | Signal after Orchestrator commit. Must contain exactly `sprint=N` or `sprint=N-retry`. |
+| `.sprintfoundry/eval-trigger.txt` | Orchestrator | Signal after Orchestrator commit. Must contain exactly `sprint=N` or `sprint=N-retry`. |
+| `.sprintfoundry/quality-gates/quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK. |
 | `.sprintfoundry/eval-results/eval-result-{N}.md` | Evaluator | Authoritative sprint verdict kept out of the project root. |
-| `run-state.json` | Orchestrator | Cache: mode, retry count, pause state, branch state. |
-| `claude-progress.txt` | Generator | Compact handoff, not a transcript. |
+| `.sprintfoundry/run-state.json` | Orchestrator | Cache: mode, retry count, pause state, branch state. |
+| `.sprintfoundry/claude-progress.txt` | Generator | Compact handoff, not a transcript. |
 | `change-request.md` | User + Orchestrator | Classified product iteration. |
 | `bug-report.md` | User + Orchestrator | Dedicated defect intake. |
-| `harness-audit.ndjson` | Orchestrator + hooks | Append-only forensic log. |
+| `.sprintfoundry/harness-audit.ndjson` | Orchestrator + hooks | Append-only forensic log. |
 | `init.sh` | Planner | Idempotent startup for the project under test. |
 
 Authoritative completion signal:
@@ -79,14 +80,14 @@ Success criteria must be black-box-verifiable through that surface.
 
 Route strictly by current files:
 
-- `run-state.json.needs_human=true` -> pause immediately.
+- `.sprintfoundry/run-state.json.needs_human=true` -> pause immediately.
 - No `planner-spec.json` -> Planner.
 - `bug-report.md` -> Codex proposes a bugfix sprint contract.
 - `change-request.md` -> route by `Type: bugfix | minor_feature | major_feature | replan`.
 - Unapproved `sprint-contract.md` -> Evaluator contract review.
 - Approved `sprint-contract.md` with no trigger -> prepare sprint branch, write fence, invoke Codex.
-- `.sprintfoundry/commit-requests/sprint-{N}.json` -> Orchestrator validates, commits, writes `eval-trigger.txt`.
-- `eval-trigger.txt` -> Evaluator CHECK unless a stale FAIL requires retry routing.
+- `.sprintfoundry/commit-requests/sprint-{N}.json` -> Orchestrator validates, commits, writes `.sprintfoundry/eval-trigger.txt`.
+- `.sprintfoundry/eval-trigger.txt` -> Evaluator CHECK unless a stale FAIL requires retry routing.
 - SPRINT PASS -> cleanup trigger, contract, and fence before the next sprint.
 
 Never start Sprint N if any prior planned sprint lacks `SPRINT PASS`.
@@ -96,7 +97,7 @@ Never start Sprint N if any prior planned sprint lacks `SPRINT PASS`.
 Every Codex session starts with:
 
 ```bash
-cat claude-progress.txt 2>/dev/null || echo "[no progress]"
+cat .sprintfoundry/claude-progress.txt 2>/dev/null || echo "[no progress]"
 git log --oneline -10
 bash init.sh
 ```
@@ -118,7 +119,7 @@ Do not treat old chat context as truth.
 - Preferred branch: `codex/sprint-<N>-<short-slug>`.
 - Retries stay on the same sprint branch.
 - A new sprint gets a new branch.
-- Verify `git branch --show-current` matches `run-state.json.active_branch`
+- Verify `git branch --show-current` matches `.sprintfoundry/run-state.json.active_branch`
   when unattended mode is active.
 
 ## Contract Phase
@@ -185,7 +186,7 @@ git diff --stat
 Also remove debug output, dead code, temporary files, and duplicated logic.
 
 Prepare a commit request. Do not run `git add`, `git commit`, or write
-`eval-trigger.txt` from Codex:
+`.sprintfoundry/eval-trigger.txt` from Codex:
 
 ```json
 {
@@ -199,8 +200,8 @@ Prepare a commit request. Do not run `git add`, `git commit`, or write
 ```
 
 Write it to `.sprintfoundry/commit-requests/sprint-<N>.json`, update
-`claude-progress.txt` compactly, then stop. The Orchestrator will commit and
-write `eval-trigger.txt` after validation.
+`.sprintfoundry/claude-progress.txt` compactly, then stop. The Orchestrator
+will commit and write `.sprintfoundry/eval-trigger.txt` after validation.
 
 ## Retry Phase
 
@@ -220,12 +221,13 @@ When invoked after SPRINT FAIL:
 }
 ```
 
-Then update `claude-progress.txt` compactly and stop. The Orchestrator commits
-and writes `eval-trigger.txt` with `sprint=N-retry`.
+Then update `.sprintfoundry/claude-progress.txt` compactly and stop. The
+Orchestrator commits and writes `.sprintfoundry/eval-trigger.txt` with
+`sprint=N-retry`.
 
 ## Progress Log Policy
 
-`claude-progress.txt` must stay small:
+`.sprintfoundry/claude-progress.txt` must stay small:
 
 - latest project summary
 - latest three sprint entries only
@@ -238,7 +240,7 @@ three sprints, or includes stack traces/test dumps/multi-paragraph narratives.
 
 Stop and surface to Orchestrator/human when:
 
-- `run-state.json.needs_human=true`
+- `.sprintfoundry/run-state.json.needs_human=true`
 - retry limit is exceeded
 - `init.sh` repeatedly fails
 - required secrets/services/tools are unavailable
@@ -251,10 +253,10 @@ Stop and surface to Orchestrator/human when:
 - Never code before `CONTRACT APPROVED`.
 - Never self-evaluate or write `.sprintfoundry/eval-results/eval-result-{N}.md`.
 - Never write `SPRINT PASS` or `SPRINT FAIL`.
-- Never run `git add`, `git commit`, or write `eval-trigger.txt`.
-- Never write to `run-state.json`.
+- Never run `git add`, `git commit`, or write `.sprintfoundry/eval-trigger.txt`.
+- Never write to `.sprintfoundry/run-state.json`.
 - Never implement multiple sprints in one Codex session.
 - Never start a new sprint on the previous sprint branch.
 - Never merge an unapproved sprint branch into `main`.
-- Never rewrite `harness-audit.ndjson`; append only.
+- Never rewrite `.sprintfoundry/harness-audit.ndjson`; append only.
 - Never use destructive git commands unless explicitly requested by the user.

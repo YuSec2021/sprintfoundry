@@ -14,7 +14,7 @@ git config core.hooksPath .githooks
 
 echo "Installed harness git hooks (core.hooksPath=.githooks):"
 echo "  pre-commit  — blocks sprint-advance commits when audit fails"
-echo "  post-commit — records every commit into harness-audit.ndjson"
+echo "  post-commit — records every commit into .sprintfoundry/harness-audit.ndjson"
 echo ""
 echo "Useful commands:"
 echo "  python3 scripts/harness-log.py tail -n 30"

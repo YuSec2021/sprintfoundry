@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Append-only audit log CLI for the Claude + Codex sprint harness.
 
-The authoritative timeline lives in `harness-audit.ndjson`. This tool is a
+The authoritative timeline lives in `.sprintfoundry/harness-audit.ndjson`. This tool is a
 thin wrapper that makes it easy for humans and hooks to write well-formed
 entries and to read the log back with structured filters.
 
@@ -28,8 +28,9 @@ from pathlib import Path
 from typing import Any
 
 
-AUDIT_FILE = "harness-audit.ndjson"
+AUDIT_FILE = ".sprintfoundry/harness-audit.ndjson"
 EVAL_RESULTS_DIR = ".sprintfoundry/eval-results"
+RUN_STATE_FILE = ".sprintfoundry/run-state.json"
 
 
 def iso_now() -> str:
@@ -39,12 +40,15 @@ def iso_now() -> str:
 def append_record(project_dir: Path, record: dict[str, Any]) -> None:
     record.setdefault("ts", iso_now())
     path = project_dir / AUDIT_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def read_records(project_dir: Path) -> list[dict[str, Any]]:
     path = project_dir / AUDIT_FILE
+    if not path.exists():
+        path = project_dir / "harness-audit.ndjson"
     if not path.exists():
         return []
     records: list[dict[str, Any]] = []
@@ -160,12 +164,14 @@ def cmd_filter(args: argparse.Namespace) -> int:
 def cmd_verify(args: argparse.Namespace) -> int:
     """Print a reconciliation report without writing anything.
 
-    Useful when diagnosing a pause: shows declared state (run-state.json) next
+    Useful when diagnosing a pause: shows declared state (.sprintfoundry/run-state.json) next
     to the authoritative eval-result verdicts and highlights any gaps.
     """
     root = args.project_dir
     spec_path = root / "planner-spec.json"
-    run_state_path = root / "run-state.json"
+    run_state_path = root / RUN_STATE_FILE
+    if not run_state_path.exists():
+        run_state_path = root / "run-state.json"
     if not spec_path.exists():
         print("no planner-spec.json; nothing to verify")
         return 0
@@ -197,7 +203,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     mode = run_state.get("mode", "?")
     needs_human = run_state.get("needs_human", False)
 
-    print(f"run-state.json  mode={mode}  last_successful_sprint={declared_last}"
+    print(f".sprintfoundry/run-state.json  mode={mode}  last_successful_sprint={declared_last}"
           f"  needs_human={needs_human}")
     print("eval-result verdicts:")
     for sprint in spec.get("sprints", []):
@@ -247,7 +253,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p_filter.set_defaults(func=cmd_filter)
 
     p_verify = sub.add_parser(
-        "verify", help="Reconcile run-state.json against eval-result verdicts."
+        "verify", help="Reconcile .sprintfoundry/run-state.json against eval-result verdicts."
     )
     p_verify.set_defaults(func=cmd_verify)
 

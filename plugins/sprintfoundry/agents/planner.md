@@ -3,7 +3,7 @@ name: planner
 description: >
   Use when the orchestrator is starting a new project or refreshing the master
   product plan. Turns a short user prompt into planner-spec.json, init.sh, and
-  an initial claude-progress.txt entry. Never writes implementation code.
+  an initial .sprintfoundry/claude-progress.txt entry. Never writes implementation code.
 tools: Read, Write, Bash, WebFetch
 model: claude-opus-4-6
 ---
@@ -15,7 +15,7 @@ You never write implementation code.
 ## On every invocation, orient from existing state first
 
 ```bash
-cat claude-progress.txt 2>/dev/null || echo "[no progress file]"
+cat .sprintfoundry/claude-progress.txt 2>/dev/null || cat claude-progress.txt 2>/dev/null || echo "[no progress file]"
 git log --oneline -10 2>/dev/null || echo "[no git history]"
 cat planner-spec.json 2>/dev/null || echo "[no planner spec yet]"
 ```
@@ -29,9 +29,10 @@ explicitly asks you to revise the plan.
 
 For a new project, write all of the following:
 
-1. `planner-spec.json`
-2. `init.sh`
-3. `claude-progress.txt` initial handoff entry
+1. `.sprintfoundry/scope-classification.json`
+2. `planner-spec.json`
+3. `init.sh`
+4. `.sprintfoundry/claude-progress.txt` initial handoff entry
 
 Stop after these artifacts are written.
 
@@ -127,12 +128,13 @@ Write `init.sh` as the reproducible startup entrypoint for the full project.
 ### Failure documentation
 
 If the stack is not fully known yet, create the most reasonable scaffold and
-document assumptions in `claude-progress.txt`.
+document assumptions in `.sprintfoundry/claude-progress.txt`.
 
 ---
 
-## claude-progress.txt requirements
+## .sprintfoundry/claude-progress.txt requirements
 
+Create `.sprintfoundry/` first if it does not exist.
 Append a short initial handoff entry that includes:
 
 - Project name

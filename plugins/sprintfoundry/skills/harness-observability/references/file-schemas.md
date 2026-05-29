@@ -1,6 +1,6 @@
 # File Schemas
 
-## `run-state.json`
+## `.sprintfoundry/run-state.json`
 
 Recommended shape:
 
@@ -26,7 +26,7 @@ Field guidance:
 - `needs_human`: `true` when autonomous execution should stop
 - `last_run_at`: ISO 8601 timestamp with timezone
 
-## `run-events.ndjson`
+## `.sprintfoundry/logs/run-events.ndjson`
 
 One JSON object per line.
 
@@ -46,7 +46,7 @@ Useful optional fields:
 - `commit`
 - `needs_human`
 
-## `orchestrator-log.ndjson`
+## `.sprintfoundry/logs/orchestrator-log.ndjson`
 
 One JSON object per line describing a routing decision.
 
@@ -73,10 +73,10 @@ Recommended sections:
 - Retry limit exceeded after repeated evaluator failures
 
 ## Files To Inspect
-- `run-state.json`
+- `.sprintfoundry/run-state.json`
 - `.sprintfoundry/eval-results/eval-result-3.md`
 - `sprint-contract.md`
-- `claude-progress.txt`
+- `.sprintfoundry/claude-progress.txt`
 
 ## Recommended Action
 - Decide whether to revise the contract or re-plan the sprint
