@@ -183,7 +183,7 @@ After every `SPRINT PASS`, SprintFoundry can apply an automatic semantic version
 
 - `bugfix` -> patch
 - normal feature / minor feature -> minor
-- major feature / replan / breaking signal -> major
+- major feature / replan / explicit breaking-change signal -> major
 
 The flow is defined in `references/version-updates.md` and writes `VERSION`, `CHANGELOG.md`, and a Git tag in the consuming project.
 

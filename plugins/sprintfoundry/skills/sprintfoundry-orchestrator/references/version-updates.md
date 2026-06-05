@@ -6,8 +6,8 @@ The Orchestrator decides the bump level — you never need to specify a version 
 ## 0. Auto-version decision — how the Orchestrator decides
 
 Each sprint carries a `sprint_origin` label set at the moment the sprint is initiated.
-Together with keywords found in `sprint-contract.md` and
-`.sprintfoundry/eval-results/eval-result-N.md`, this
+Together with explicit compatibility/release declarations in `sprint-contract.md`
+and `.sprintfoundry/eval-results/eval-result-N.md`, this
 determines the semver bump applied immediately after `SPRINT PASS` is confirmed.
 
 ### Decision table
@@ -16,12 +16,16 @@ determines the semver bump applied immediately after `SPRINT PASS` is confirmed.
 |---------------|-----------------------|------|---------|
 | `replan` | any | **major** | 1.3.2 → 2.0.0 |
 | `major_feature` | any | **major** | 1.3.2 → 2.0.0 |
-| any | contract contains "breaking / remove / deprecate / migrate / incompatible" | **major** | 1.3.2 → 2.0.0 |
+| any | contract contains an explicit positive declaration such as `Semver: major`, `Breaking changes: yes`, `Migration required: yes`, or `Public API: incompatible` | **major** | 1.3.2 → 2.0.0 |
 | any | eval-result contains "ARCHITECTURE DRIFT DETECTED" | **major** | 1.3.2 → 2.0.0 |
 | `bugfix` | contract has NO "new feature / add / introduce / new endpoint" | **patch** | 1.3.2 → 1.3.3 |
 | `feature` / `minor_feature` / _(default)_ | _(anything else)_ | **minor** | 1.3.2 → 1.4.0 |
 
 Rules are evaluated top-to-bottom; first match wins.
+
+The Orchestrator must not infer a major bump from incidental wording in titles,
+negative statements, or test descriptions. For example, `Without Breaking Tests`,
+`No breaking changes`, and `non-breaking migration path` are not major signals.
 
 ### Why this policy
 

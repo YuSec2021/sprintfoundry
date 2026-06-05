@@ -721,7 +721,7 @@ before any other cleanup. No human input required.
 
 **→ Major bump (X+1.0.0)** if any of:
 - `.sprintfoundry/run-state.json sprint_origin` is `"major_feature"` or `"replan"`
-- `sprint-contract.md` contains any of: `breaking`, `remove `, `replace `, `deprecate`, `migrate`, `incompatible`
+- `sprint-contract.md` contains an explicit positive compatibility/release declaration such as `Semver: major`, `Breaking changes: yes`, `Migration required: yes`, or `Public API: incompatible`
 - `.sprintfoundry/eval-results/eval-result-N.md` contains `ARCHITECTURE DRIFT DETECTED`
 - Any sprint in `planner-spec.json` was newly marked `skipped: true` since the last bump
 
@@ -779,12 +779,49 @@ if mem_path.exists() and sprint_n.isdigit():
 major, minor, patch = map(int, current.split("."))
 
 MAJOR_ORIGINS  = {"major_feature", "replan"}
-MAJOR_KEYWORDS = ["breaking", "remove ", "replace ", "deprecate", "migrate", "incompatible"]
 PATCH_ORIGIN   = "bugfix"
 PATCH_EXCLUDES = ["new feature", "add ", "introduce", "new endpoint", "new page"]
 
+def _field_value(line, labels):
+    stripped = re.sub(r"^\s*(?:[-*]|\d+\.)\s*", "", line).strip()
+    if ":" not in stripped:
+        return None
+    label, value = stripped.split(":", 1)
+    label = label.strip().lower()
+    if label in labels:
+        return value.strip().lower()
+    return None
+
+def _is_negative(value: str) -> bool:
+    return bool(re.match(r"^(no|none|false|n/a|not required|without)\b", value))
+
+def has_explicit_major_signal(text: str) -> bool:
+    """Only explicit release/compatibility declarations can force a major bump."""
+    for line in text.splitlines():
+        value = _field_value(line, ("semver", "version bump"))
+        if value and re.match(r"^major\b", value):
+            return True
+
+        value = _field_value(line, ("breaking change", "breaking changes"))
+        if value and not _is_negative(value):
+            return True
+
+        value = _field_value(line, ("migration", "migration required"))
+        if value and not _is_negative(value) and re.search(r"\b(yes|true|required)\b", value):
+            return True
+
+        value = _field_value(line, ("compatibility", "backward compatibility", "backwards compatibility"))
+        if value and not _is_negative(value) and re.search(r"\b(breaking|broken|incompatible|not compatible)\b", value):
+            return True
+
+        value = _field_value(line, ("public api", "api compatibility"))
+        if value and not _is_negative(value) and re.search(r"\b(remove|removed|replace|replaced|deprecate|deprecated|incompatible)\b", value):
+            return True
+
+    return False
+
 if (origin in MAJOR_ORIGINS
-        or any(kw in contract.lower() for kw in MAJOR_KEYWORDS)
+        or has_explicit_major_signal(contract)
         or "ARCHITECTURE DRIFT DETECTED" in eval_text):
     bump = "major"; major += 1; minor = 0; patch = 0
 elif (origin == PATCH_ORIGIN
