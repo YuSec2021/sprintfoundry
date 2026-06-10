@@ -123,7 +123,7 @@ Evaluator 不再是浏览器专用验收器。Planner 会在 `planner-spec.json`
   "verification": {
     "mode": "browser | api | cli | job | library",
     "base_url": "http://localhost:3000",
-    "command": "pytest -q"
+    "command": "uv run --python <project-python-version> --with pytest pytest -q"
   }
 }
 ```
@@ -249,7 +249,7 @@ CI 工作流 `.github/workflows/validate-plugins.yml` 会校验：
 
 ```bash
 # 验证 Python 协议测试
-python3 -m pytest -q
+bash scripts/run-python-tests.sh
 
 # 校验并构建 plugin 产物
 bash scripts/package_plugin.sh

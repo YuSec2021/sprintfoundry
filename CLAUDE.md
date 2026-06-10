@@ -123,7 +123,7 @@ Planner should include:
   "verification": {
     "mode": "browser | api | cli | job | library",
     "base_url": "http://localhost:3000",
-    "command": "pytest -q"
+    "command": "uv run --python <project-python-version> --with pytest pytest -q"
   }
 }
 ```

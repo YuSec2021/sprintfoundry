@@ -152,7 +152,7 @@ python3 scripts/harness-log.py note --text "reason for manual action"
 
 | Layer | Owner | Runner | Scope |
 |-------|-------|--------|-------|
-| Unit tests | Generator | `pytest -q` | Functions, components, logic |
+| Unit tests | Generator | `uv run --python <project-python-version> --with pytest pytest -q` | Functions, components, logic |
 | Black-box checks | Evaluator | verification.mode-specific | Full external behaviour |
 
 Failure attribution:

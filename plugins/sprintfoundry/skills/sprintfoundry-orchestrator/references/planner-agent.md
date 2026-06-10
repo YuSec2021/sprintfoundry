@@ -103,7 +103,7 @@ forcing the whole system into one oversized sprint list.
   "verification": {
     "mode": "browser | api | cli | job | library",
     "base_url": "http://localhost:3000",
-    "command": "pytest -q"
+    "command": "uv run --python <project-python-version> --with pytest pytest -q"
   },
   "features": ["..."],
   "epics": [
@@ -154,10 +154,22 @@ forcing the whole system into one oversized sprint list.
 
 Validate prerequisites inside `init.sh`:
 ```bash
-for cmd in node npm python3 pytest git bash; do
+for cmd in node npm uv git bash; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing: $cmd"; exit 1; }
 done
 ```
+
+Python tests must not rely on whatever `python3` or `pytest` happens to be
+installed globally. Detect the project Python version from
+`SPRINTFOUNDRY_PYTHON_VERSION`, `.python-version`, `runtime.txt`, or
+`pyproject.toml requires-python`, then run tests through:
+
+```bash
+uv run --python <project-python-version> --with pytest pytest -q
+```
+
+`<project-python-version>` is a template placeholder. Generated specs and
+handoffs should use the concrete detected version whenever it is known.
 
 ---
 

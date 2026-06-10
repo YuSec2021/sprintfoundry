@@ -124,7 +124,7 @@ The Evaluator is not browser-only. The Planner records the external verification
   "verification": {
     "mode": "browser | api | cli | job | library",
     "base_url": "http://localhost:3000",
-    "command": "pytest -q"
+    "command": "uv run --python <project-python-version> --with pytest pytest -q"
   }
 }
 ```
@@ -250,7 +250,7 @@ The CI workflow `.github/workflows/validate-plugins.yml` validates:
 
 ```bash
 # Validate Python protocol tests
-python3 -m pytest -q
+bash scripts/run-python-tests.sh
 
 # Validate and build the plugin artifact
 bash scripts/package_plugin.sh

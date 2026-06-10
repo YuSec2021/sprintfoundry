@@ -87,16 +87,46 @@ if any(x in frontend for x in ["react", "next", "vue", "node", "express"]) or \
 
 # ── Python ───────────────────────────────────────────────────────────────────
 if any(x in backend for x in ["python", "fastapi", "flask", "django", "poetry"]):
-    rc, out = run("python3 -m flake8 . --max-line-length=100 --exclude=.git,__pycache__,venv 2>&1 | tail -30")
+    def detect_python_version():
+        if os.environ.get("SPRINTFOUNDRY_PYTHON_VERSION"):
+            raw = os.environ["SPRINTFOUNDRY_PYTHON_VERSION"]
+        elif pathlib.Path(".python-version").exists():
+            raw = pathlib.Path(".python-version").read_text().splitlines()[0]
+        elif pathlib.Path("runtime.txt").exists():
+            raw = pathlib.Path("runtime.txt").read_text().splitlines()[0]
+        elif pathlib.Path("pyproject.toml").exists():
+            match = re.search(
+                r"(?m)^\s*requires-python\s*=\s*[\"']([^\"']+)[\"']",
+                pathlib.Path("pyproject.toml").read_text(errors="ignore"),
+            )
+            raw = match.group(1) if match else ""
+        else:
+            probe = subprocess.run(
+                "python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'",
+                shell=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            raw = probe.stdout.strip()
+
+        match = re.search(r"(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)", raw)
+        return match.group(1) if match else "3.9"
+
+    py = detect_python_version()
+    uv_prefix = f"uv run --python {py}"
+    results["python-env"] = {"passed": True, "output": f"Using uv-managed Python {py}"}
+
+    rc, out = run(f"{uv_prefix} --with flake8 flake8 . --max-line-length=100 --exclude=.git,__pycache__,venv,.venv 2>&1 | tail -30")
     results["flake8"] = {"passed": rc == 0, "output": out}
 
-    rc, out = run("python3 -m mypy . --ignore-missing-imports --no-error-summary 2>&1 | tail -30")
+    rc, out = run(f"{uv_prefix} --with mypy mypy . --ignore-missing-imports --no-error-summary 2>&1 | tail -30")
     results["mypy"] = {"passed": rc == 0, "output": out}
 
-    rc, out = run("python3 -m pytest --cov=. --cov-fail-under=70 -q 2>&1 | tail -20")
+    rc, out = run(f"{uv_prefix} --with pytest --with pytest-cov pytest --cov=. --cov-fail-under=70 -q 2>&1 | tail -20")
     results["pytest-coverage"] = {"passed": rc == 0, "output": out}
 
-    rc, out = run("pip-audit --desc 2>&1 | tail -20")
+    rc, out = run(f"{uv_prefix} --with pip-audit pip-audit --desc 2>&1 | tail -20")
     results["pip-audit"] = {"passed": rc == 0, "output": out}
 
 # ── 兜底：如果未能识别任何栈，只跑 git diff stat ─────────────────────────────
@@ -156,8 +186,17 @@ PY
 | pytest --cov | 单测 + 覆盖率 | 行覆盖率 < 70% |
 | pip-audit | 依赖安全 | 任何已知漏洞 |
 
-若 `mypy` 未安装：`pip install mypy --break-system-packages`  
-若 `pip-audit` 未安装：`pip install pip-audit --break-system-packages`
+Python 工具必须通过本地 `uv` 运行。质量门禁先读取项目声明的 Python 版本：
+`SPRINTFOUNDRY_PYTHON_VERSION`、`.python-version`、`runtime.txt`、
+`pyproject.toml [project].requires-python`，最后才兜底到当前 `python3`
+的 major.minor。随后用同版本执行：
+
+```bash
+uv run --python <version> --with pytest --with pytest-cov pytest --cov=. --cov-fail-under=THRESHOLD -q
+```
+
+`flake8`、`mypy`、`pip-audit` 同样用 `uv run --python <version> --with <tool>`，
+不要安装到系统 Python，也不要使用 `--break-system-packages`。
 
 ### 其他栈
 
@@ -196,7 +235,7 @@ npm audit --audit-level=high
 
 ### pip-audit（Python 项目）
 ```bash
-pip-audit --desc
+uv run --python <project-python-version> --with pip-audit pip-audit --desc
 # 任何已知 CVE 均失败
 ```
 

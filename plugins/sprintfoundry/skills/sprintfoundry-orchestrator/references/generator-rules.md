@@ -64,9 +64,13 @@ npx eslint . --ext .js,.jsx,.ts,.tsx --max-warnings=0
 npx tsc --noEmit
 
 # Python 项目
-python3 -m flake8 . --max-line-length=100 --exclude=.git,__pycache__,venv
-python3 -m mypy . --ignore-missing-imports --no-error-summary
+uv run --python <project-python-version> --with flake8 flake8 . --max-line-length=100 --exclude=.git,__pycache__,venv,.venv
+uv run --python <project-python-version> --with mypy mypy . --ignore-missing-imports --no-error-summary
 ```
+
+运行前必须解析 `<project-python-version>`：优先读取 `SPRINTFOUNDRY_PYTHON_VERSION`、
+`.python-version`、`runtime.txt`、`pyproject.toml requires-python`。commit request
+里记录实际执行的版本号（例如 `3.11`），不要保留占位符。
 
 lint/type 错误必须修复，不可用 `// eslint-disable` 或 `# type: ignore` 绕过，
 除非该行本身有充分理由（须在 commit request 的 message 中说明）。
@@ -78,7 +82,7 @@ lint/type 错误必须修复，不可用 `// eslint-disable` 或 `# type: ignore
 npx jest --coverage --coverageThreshold='{"global":{"lines":THRESHOLD}}'
 
 # Python
-python3 -m pytest --cov=. --cov-fail-under=THRESHOLD -q
+uv run --python <project-python-version> --with pytest --with pytest-cov pytest --cov=. --cov-fail-under=THRESHOLD -q
 ```
 
 覆盖率阈值（读取 `.sprintfoundry/run-state.json current_sprint` 和 `sprint_origin`）：
@@ -118,7 +122,7 @@ cat > ".sprintfoundry/commit-requests/sprint-<N>.json" <<JSON
   "contract_sha256": "$CONTRACT_SHA",
   "commit_message": "feat(sprint-<N>): <imperative description, 72 chars max>",
   "changed_files": ["<relative paths>"],
-  "tests": [{"command": "pytest -q", "status": "passed"}]
+  "tests": [{"command": "uv run --python <project-python-version> --with pytest pytest -q", "status": "passed"}]
 }
 JSON
 rm -f sprint-contract.md.sha256
@@ -162,7 +166,7 @@ If this file exists, Codex is authorised to implement **only** the sprint named 
   "contract_sha256": "<approved contract sha256 when available>",
   "commit_message": "feat(sprint-<N>): <imperative description, 72 chars max>",
   "changed_files": ["<relative paths>"],
-  "tests": [{"command": "pytest -q", "status": "passed"}]
+  "tests": [{"command": "uv run --python <project-python-version> --with pytest pytest -q", "status": "passed"}]
 }
 ```
 

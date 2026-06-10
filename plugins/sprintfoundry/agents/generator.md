@@ -31,7 +31,7 @@ diagnose and fix the environment first — do not begin implementation.
 
 ```bash
 # 1. Unit tests pass (fast check that prior sprints haven't regressed)
-pytest -q --tb=short
+uv run --python <project-python-version> --with pytest pytest -q --tb=short
 
 # 2. Dev server is reachable (confirms init.sh actually started the stack)
 curl -sf http://localhost:3000 > /dev/null \
@@ -158,9 +158,14 @@ For each success criterion in `sprint-contract.md`:
 - Fix any failing behavior before requesting commit
 
 ```bash
-pytest -q
+uv run --python <project-python-version> --with pytest pytest -q
 git diff --stat
 ```
+
+Resolve `<project-python-version>` before running the command and before writing
+the commit request. Use `SPRINTFOUNDRY_PYTHON_VERSION`, `.python-version`,
+`runtime.txt`, or `pyproject.toml requires-python`; commit requests must record
+the concrete version that actually ran.
 
 Also do a cleanup pass:
 
@@ -188,7 +193,7 @@ cat > ".sprintfoundry/commit-requests/sprint-<N>.json" <<JSON
     "<relative path changed by this sprint>"
   ],
   "tests": [
-    {"command": "pytest -q", "status": "passed"}
+    {"command": "uv run --python <project-python-version> --with pytest pytest -q", "status": "passed"}
   ]
 }
 JSON
@@ -250,7 +255,7 @@ cat > ".sprintfoundry/commit-requests/sprint-<N>.json" <<JSON
     "<relative path changed by this retry>"
   ],
   "tests": [
-    {"command": "pytest -q", "status": "passed"}
+    {"command": "uv run --python <project-python-version> --with pytest pytest -q", "status": "passed"}
   ]
 }
 JSON

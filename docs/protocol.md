@@ -295,7 +295,7 @@ initial entry in `.sprintfoundry/claude-progress.txt`.
   "verification": {
     "mode": "browser | api | cli | job | library",
     "base_url": "http://localhost:3000",
-    "command": "pytest -q"
+    "command": "uv run --python <project-python-version> --with pytest pytest -q"
   },
   "features": ["..."],
   "epics": [
@@ -420,7 +420,7 @@ For each success criterion in `sprint-contract.md`, verify it manually.
 Fix any failures before requesting a commit.
 
 ```bash
-pytest -q           # unit tests must pass
+uv run --python <project-python-version> --with pytest pytest -q  # unit tests must pass
 git diff --stat     # review scope of changes
 ```
 
@@ -447,7 +447,7 @@ cat > ".sprintfoundry/commit-requests/sprint-<N>.json" <<JSON
   "contract_sha256": "$CONTRACT_SHA",
   "commit_message": "feat(sprint-<N>): <imperative description, 72 chars max>",
   "changed_files": ["<relative paths>"],
-  "tests": [{"command": "pytest -q", "status": "passed"}]
+  "tests": [{"command": "uv run --python <project-python-version> --with pytest pytest -q", "status": "passed"}]
 }
 JSON
 rm -f sprint-contract.md.sha256
@@ -813,18 +813,26 @@ start or verify the application stack itself:
 |-------------|----------------|---------|
 | Node.js | 18 LTS | frontend/backend runtime and builds |
 | npm | 9 | package management |
-| Python | 3.9 | unit testing with pytest |
-| pytest | 7 | unit test runner |
+| uv | latest stable | Python version selection and test tool isolation |
+| Python | project-declared version | unit testing through uv-managed interpreters |
 | Git | 2.30 | version control, sprint branches |
 | Bash | 4 | `init.sh`, hooks |
 
 Recommended validation snippet for `init.sh`:
 
 ```bash
-for cmd in node npm python3 pytest git bash; do
+for cmd in node npm uv git bash; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing required tool: $cmd"; exit 1; }
 done
 ```
+
+Python tests must run through local `uv`, not through whichever global
+`python3` or `pytest` happens to be installed. Detect the project Python version
+from `SPRINTFOUNDRY_PYTHON_VERSION`, `.python-version`, `runtime.txt`, or
+`pyproject.toml requires-python`; if none exists, fall back to the current
+`python3` major.minor only for version detection.
+Commands in commit requests must include the concrete resolved version, for
+example `uv run --python 3.11 --with pytest pytest -q`, not the placeholder.
 
 ### Agent-specific requirements
 
@@ -840,7 +848,7 @@ These may be required by Generator or Evaluator, but must not be enforced by
 ## Tech Stack
 
 ```
-Testing   : verification.mode-specific black-box checks, pytest (unit)
+Testing   : verification.mode-specific black-box checks, uv-managed pytest (unit)
 VCS       : Git — one clean commit per sprint
 ```
 
@@ -853,7 +861,7 @@ prevents misattributing failures.
 
 | Layer | Owner | Runner | Scope | Characteristics |
 |-------|-------|--------|-------|----------------|
-| Unit tests | Generator | `pytest -q` | Functions, components, logic | Fast, deterministic, no browser |
+| Unit tests | Generator | `uv run --python <project-python-version> --with pytest pytest -q` | Functions, components, logic | Fast, deterministic, no browser |
 | Black-box checks | Evaluator | verification.mode-specific tools | Full external behavior through browser/API/CLI/job/library surface | Slower, may be flaky on env issues |
 
 **Failure attribution rules:**
@@ -872,7 +880,7 @@ never accept passing unit tests as a substitute for independent black-box verifi
 
 ```bash
 bash init.sh                               # start full dev stack
-pytest -q                                  # unit tests
+uv run --python <project-python-version> --with pytest pytest -q  # unit tests
 npx playwright test                        # E2E tests
 cat .sprintfoundry/claude-progress.txt && git log --oneline -10   # session orientation
 ```

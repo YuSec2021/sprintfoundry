@@ -61,7 +61,7 @@ Planner must include:
   "verification": {
     "mode": "browser | api | cli | job | library",
     "base_url": "http://localhost:3000",
-    "command": "pytest -q"
+    "command": "uv run --python <project-python-version> --with pytest pytest -q"
   }
 }
 ```
@@ -179,9 +179,13 @@ Implementation rules:
 Self-check before requesting a commit:
 
 ```bash
-pytest -q
+uv run --python <project-python-version> --with pytest pytest -q
 git diff --stat
 ```
+
+Resolve `<project-python-version>` from `SPRINTFOUNDRY_PYTHON_VERSION`,
+`.python-version`, `runtime.txt`, or `pyproject.toml requires-python`; record
+the concrete version in commit requests, not the placeholder.
 
 Also remove debug output, dead code, temporary files, and duplicated logic.
 
@@ -195,7 +199,7 @@ Prepare a commit request. Do not run `git add`, `git commit`, or write
   "contract_sha256": "<sha256 from sprint-contract.md.sha256>",
   "commit_message": "feat(sprint-<N>): <imperative description>",
   "changed_files": ["<relative paths>"],
-  "tests": [{"command": "pytest -q", "status": "passed"}]
+  "tests": [{"command": "uv run --python <project-python-version> --with pytest pytest -q", "status": "passed"}]
 }
 ```
 
