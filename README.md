@@ -151,6 +151,7 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 | `planner-spec.json` | Planner | Product spec, design language, tech stack, verification mode, and sprint list |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint acceptance contract; code cannot start until approved |
 | `.sprintfoundry/sprint-fence.json` | Orchestrator | Expected sprint number and base commit before implementation starts |
+| `.sprintfoundry/sprint_prompt/sprint-{N}-{action}.md` | Orchestrator | Full Codex prompt for the current contract, implementation, or retry handoff; Codex CLI receives only a short command telling it to read this file |
 | `.sprintfoundry/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation |
 | `.sprintfoundry/eval-trigger.txt` | Orchestrator | Signal that a committed sprint is ready for quality gate and evaluation |
 | `.sprintfoundry/quality-gates/quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK |
@@ -162,6 +163,8 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 | `human-escalation.md` | Orchestrator | Current pause reason and recommended human action |
 
 Runtime state lives under `.sprintfoundry/`. Legacy root-level `run-state.json`, `eval-trigger.txt`, `sprint-fence.json`, `eval-result-*.md`, and `quality-gate-*.md` may be migrated or read for compatibility, but new machine artifacts should not be written to the project root.
+
+Codex handoffs are file-backed: before invoking Codex, the Orchestrator writes the complete sprint-specific instructions to `.sprintfoundry/sprint_prompt/` and passes only a short "read this local prompt file" wrapper on the command line. Retry prompts also embed the Evaluator failure details in this file before stale eval-result files are removed, so retries do not depend on deleted state.
 
 ## Quality Gate
 
