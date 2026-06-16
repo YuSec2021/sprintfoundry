@@ -129,7 +129,7 @@ only when the issue is part of a broader iteration, not a pure regression.
 ### Preparation
 None — Codex reads the defect description and proposes a tightly scoped contract.
 
-### Codex prompt (Orchestrator sends)
+### Codex prompt file (Orchestrator writes)
 ```
 Read planner-spec.json and change-request.md.
 Add a new sprint entry to planner-spec.json for this bugfix (next available sprint ID).
@@ -159,7 +159,7 @@ single new API endpoints, configuration options.
 ### Preparation
 None for Planner — Codex appends the sprint and proposes the contract in one step.
 
-### Codex prompt (Orchestrator sends)
+### Codex prompt file (Orchestrator writes)
 ```
 Read planner-spec.json and change-request.md.
 Determine the next available sprint ID (max existing ID + 1).

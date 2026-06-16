@@ -138,7 +138,7 @@ The Orchestrator commits, writes `.sprintfoundry/eval-trigger.txt`, and advances
 
 ## Handling SPRINT FAIL (retry invocation)
 
-1. Read `.sprintfoundry/eval-results/eval-result-N.md` fully (Orchestrator inlines it into the prompt)
+1. Read the retry instructions from `.sprintfoundry/sprint_prompt/sprint-N-invoke-codex-for-retry.md` (Orchestrator inlines the Evaluator verdict there before deleting the stale eval-result)
 2. Fix **only** what the Evaluator cited
 3. Write `.sprintfoundry/commit-requests/sprint-N.json` with `attempt: "retry"` and `commit_message: "fix(sprint-N): address evaluator failure"`
 4. Update `.sprintfoundry/claude-progress.txt` with "pending Orchestrator commit"

@@ -501,7 +501,7 @@ IF .sprintfoundry/eval-results/eval-result-N.md contains "SPRINT FAIL"
     → pause: mode="paused", needs_human=true, last_failure_reason="max retries exceeded"
   ELSE
     → increment .sprintfoundry/run-state.json: retry_count += 1, last_run_at = now()
-      inline .sprintfoundry/eval-results/eval-result-N.md body into codex prompt
+      inline .sprintfoundry/eval-results/eval-result-N.md body into .sprintfoundry/sprint_prompt/sprint-N-invoke-codex-for-retry.md
       delete .sprintfoundry/eval-results/eval-result-N.md
       → Codex retry (see commands below)
 
@@ -1043,40 +1043,56 @@ If a `major_feature` or `replan` change contradicts an already-passed sprint's c
 
 Use these exact flags. Always `--skip-git-repo-check`.
 Run them from the target project root, never from the plugin cache directory.
+Do not pass the full sprint prompt on the command line. First write it to
+`.sprintfoundry/sprint_prompt/sprint-N-<action>.md`, then pass only the short
+file-reading wrapper to Codex. This avoids shell quoting bugs and command-line
+hangs caused by very long prompts.
 
 ```bash
 # Propose sprint contract
 cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
+mkdir -p .sprintfoundry/sprint_prompt
+cat > .sprintfoundry/sprint_prompt/sprint-N-contract.md <<'EOF'
+Read planner-spec.json. Propose sprint-contract.md for Sprint N.
+Follow AGENTS.md Generator rules. Stop after writing the file.
+EOF
 codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
-  "Read planner-spec.json. Propose sprint-contract.md for Sprint N.
-   Follow AGENTS.md Generator rules. Stop after writing the file."
+  "Read the local SprintFoundry prompt file at .sprintfoundry/sprint_prompt/sprint-N-contract.md and follow it exactly. The file content is the authoritative prompt for this Codex run."
 
 # Implement after contract approved
 cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
+mkdir -p .sprintfoundry/sprint_prompt
+cat > .sprintfoundry/sprint_prompt/sprint-N-implementation.md <<'EOF'
+sprint-contract.md is approved. Implement Sprint N ONLY.
+Do not run git add, git commit, or write .sprintfoundry/eval-trigger.txt.
+Write .sprintfoundry/commit-requests/sprint-N.json for Orchestrator commit.
+STOP IMMEDIATELY after updating .sprintfoundry/claude-progress.txt. Follow AGENTS.md.
+EOF
 codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
-  "sprint-contract.md is approved. Implement Sprint N ONLY.
-   Do not run git add, git commit, or write .sprintfoundry/eval-trigger.txt.
-   Write .sprintfoundry/commit-requests/sprint-N.json for Orchestrator commit.
-   STOP IMMEDIATELY after updating .sprintfoundry/claude-progress.txt. Follow AGENTS.md."
+  "Read the local SprintFoundry prompt file at .sprintfoundry/sprint_prompt/sprint-N-implementation.md and follow it exactly. The file content is the authoritative prompt for this Codex run."
 
-# Fix after SPRINT FAIL (inline the eval result body before running)
+# Fix after SPRINT FAIL (inline the eval result body into the prompt file before running)
 cd "$SPRINTFOUNDRY_PROJECT_ROOT" || exit 2
+mkdir -p .sprintfoundry/sprint_prompt
+cat > .sprintfoundry/sprint_prompt/sprint-N-retry.md <<'EOF'
+Sprint N failed. Fix ONLY the cited issues from the inlined Evaluator verdict below.
+Do not run git add, git commit, or write .sprintfoundry/eval-trigger.txt.
+Write .sprintfoundry/commit-requests/sprint-N.json with attempt='retry'.
+STOP after updating .sprintfoundry/claude-progress.txt. Follow AGENTS.md.
+--- EVALUATOR VERDICT ---
+{paste .sprintfoundry/eval-results/eval-result-N.md body here}
+EOF
 codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
-  "Sprint N failed. Fix ONLY the cited issues from the inlined Evaluator verdict below.
-   Do not run git add, git commit, or write .sprintfoundry/eval-trigger.txt.
-   Write .sprintfoundry/commit-requests/sprint-N.json with attempt='retry'.
-   STOP after updating .sprintfoundry/claude-progress.txt. Follow AGENTS.md.
-   --- EVALUATOR VERDICT ---
-   {paste .sprintfoundry/eval-results/eval-result-N.md body here}"
+  "Read the local SprintFoundry prompt file at .sprintfoundry/sprint_prompt/sprint-N-retry.md and follow it exactly. The file content is the authoritative prompt for this Codex run."
 ```
 
 > **Note**: If `scripts/orchestrate.py` exists, use its emitted command instead:

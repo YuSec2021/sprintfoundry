@@ -23,6 +23,7 @@ CODEX_EXEC_MODERN_MIN_VERSION = (0, 120, 0)
 HARNESS_DIR = ".sprintfoundry"
 EVAL_RESULTS_DIR = f"{HARNESS_DIR}/eval-results"
 LOGS_DIR = f"{HARNESS_DIR}/logs"
+SPRINT_PROMPT_DIR = f"{HARNESS_DIR}/sprint_prompt"
 
 
 def iso_now() -> str:
@@ -143,8 +144,12 @@ def codex_version_tuple() -> tuple[int, int, int] | None:
     return parse_semver(f"{result.stdout}\n{result.stderr}")
 
 
-def codex_command(prompt: str) -> str:
-    quoted_prompt = shlex.quote(prompt)
+def codex_command(prompt_file: str) -> str:
+    wrapper_prompt = (
+        f"Read the local SprintFoundry prompt file at {prompt_file} and follow it exactly. "
+        "The file content is the authoritative prompt for this Codex run."
+    )
+    quoted_prompt = shlex.quote(wrapper_prompt)
     version = codex_version_tuple()
     if version is not None and version >= CODEX_EXEC_MODERN_MIN_VERSION:
         # --sandbox workspace-write keeps writes restricted to the workspace.
@@ -172,6 +177,8 @@ class RouteDecision:
     mode: str
     current_sprint: int
     command: str | None = None
+    codex_prompt: str | None = None
+    prompt_file: str | None = None
     prompt: str | None = None
     needs_human: bool = False
     last_failure_reason: str = ""
@@ -349,6 +356,7 @@ class HarnessProject:
         self.root = root.resolve()
         self.state_dir = self.root / HARNESS_DIR
         self.logs_dir = self.root / LOGS_DIR
+        self.sprint_prompt_dir = self.root / SPRINT_PROMPT_DIR
         self.spec_path = self.root / "planner-spec.json"
         self.contract_path = self.root / "sprint-contract.md"
         self.eval_trigger_path = self.state_dir / "eval-trigger.txt"
@@ -538,6 +546,31 @@ class HarnessProject:
             "started_at": iso_now(),
         }
         write_text(self.sprint_fence_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+    def sprint_prompt_rel_path(self, sprint: int, action: str) -> str:
+        action_slug = re.sub(r"[^a-z0-9]+", "-", action.lower()).strip("-")
+        action_slug = action_slug or "codex"
+        return f"{SPRINT_PROMPT_DIR}/sprint-{sprint}-{action_slug}.md"
+
+    def write_sprint_prompt(self, decision: RouteDecision) -> str | None:
+        if not decision.codex_prompt:
+            return None
+        rel_path = decision.prompt_file or self.sprint_prompt_rel_path(
+            decision.current_sprint,
+            decision.action,
+        )
+        path = self.root / rel_path
+        content = (
+            "# SprintFoundry Codex Prompt\n\n"
+            f"- Action: `{decision.action}`\n"
+            f"- Sprint: `{decision.current_sprint}`\n"
+            f"- Generated at: `{iso_now()}`\n\n"
+            "## Instructions\n\n"
+            f"{decision.codex_prompt.rstrip()}\n"
+        )
+        write_text(path, content)
+        decision.prompt_file = rel_path
+        return rel_path
 
     def read_sprint_fence(self) -> dict[str, Any] | None:
         if not self.sprint_fence_path.exists():
@@ -770,7 +803,7 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
                 rationale="evaluator requested a targeted retry of committed sprint output",
                 mode="implementing",
                 current_sprint=trigger_sprint,
-                command=codex_command(
+                codex_prompt=(
                     f"Sprint {trigger_sprint} failed. Fix ONLY the cited issues from the "
                     f"Evaluator verdict below; do not add unrelated changes.\n\n"
                     f"=== Evaluator verdict ({failed_eval.name}) ===\n"
@@ -800,7 +833,7 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
                 rationale="sprint-contract.md is approved and ready for implementation",
                 mode="implementing",
                 current_sprint=current_sprint,
-                command=codex_command(
+                codex_prompt=(
                     f"sprint-contract.md is approved. Implement Sprint {current_sprint} ONLY. "
                     f"Write .sprintfoundry/commit-requests/sprint-{current_sprint}.json "
                     "for Orchestrator commit. Do not run git commit or write .sprintfoundry/eval-trigger.txt. "
@@ -826,7 +859,7 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
             rationale="bug-report.md exists, so this request should become a dedicated bugfix sprint",
             mode="contract",
             current_sprint=current_sprint,
-            command=codex_command(
+            codex_prompt=(
                 "Read planner-spec.json and bug-report.md. Propose sprint-contract.md for a bugfix sprint. "
                 "Limit scope to the reported regression only, include browser-verifiable success criteria, "
                 "and stop after writing the file."
@@ -842,7 +875,7 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
                 rationale="change-request.md marks this work as a bugfix",
                 mode="contract",
                 current_sprint=current_sprint,
-                command=codex_command(
+                codex_prompt=(
                     "Read planner-spec.json and change-request.md. Propose sprint-contract.md for a bugfix sprint. "
                     "Limit scope to the requested fix and stop after writing the file."
                 ),
@@ -854,7 +887,7 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
                 rationale="change-request.md marks this work as a bounded iteration",
                 mode="contract",
                 current_sprint=current_sprint,
-                command=codex_command(
+                codex_prompt=(
                     "Read planner-spec.json and change-request.md. Identify the next iteration sprint and propose "
                     "sprint-contract.md for this minor feature. Keep the current architecture and VDL, and stop after writing the file."
                 ),
@@ -925,7 +958,7 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
         rationale="spec exists and no active contract, evaluation trigger, bug report, or change request is present",
         mode="contract",
         current_sprint=current_sprint,
-        command=codex_command(
+        codex_prompt=(
             f"Read planner-spec.json. Propose sprint-contract.md for Sprint {current_sprint}. "
             "Follow AGENTS.md Generator rules. Stop after writing the file."
         ),
@@ -1052,6 +1085,7 @@ def log_decision(project: HarnessProject, decision: RouteDecision) -> None:
             "has_contract": observed.get("has_contract", False),
             "contract_approved": observed.get("contract_approved", False),
             "has_eval_trigger": observed.get("has_eval_trigger", False),
+            "prompt_file": decision.prompt_file,
         },
     )
     for path in sorted(project.eval_results()):
@@ -1133,6 +1167,16 @@ def prepare_branch_for_decision(project: HarnessProject, decision: RouteDecision
     return decision
 
 
+def attach_codex_prompt_file(project: HarnessProject, decision: RouteDecision, write_file: bool) -> None:
+    if not decision.codex_prompt:
+        return
+    if decision.prompt_file is None:
+        decision.prompt_file = project.sprint_prompt_rel_path(decision.current_sprint, decision.action)
+    if write_file:
+        project.write_sprint_prompt(decision)
+    decision.command = codex_command(decision.prompt_file)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-dir", default=".", help="Target project directory.")
@@ -1160,8 +1204,11 @@ def main(argv: list[str]) -> int:
         # check in the next orchestrator call has a reference point.
         if decision.action == "invoke_codex_for_implementation":
             project.write_sprint_fence(decision.current_sprint)
+        attach_codex_prompt_file(project, decision, write_file=True)
         update_run_state(project, decision)
         log_decision(project, decision)
+    else:
+        attach_codex_prompt_file(project, decision, write_file=False)
 
     if args.run_generator and decision.command and not args.check_only:
         return subprocess.run(decision.command, cwd=str(project.root), shell=True).returncode
@@ -1174,6 +1221,7 @@ def main(argv: list[str]) -> int:
         "current_sprint": decision.current_sprint,
         "rationale": decision.rationale,
         "command": decision.command,
+        "prompt_file": decision.prompt_file,
         "prompt": decision.prompt,
         "needs_human": decision.needs_human,
     }

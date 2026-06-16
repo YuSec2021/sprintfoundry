@@ -7,14 +7,14 @@
   },
   "metadata": {
     "description": "SprintFoundry: three-agent GAN sprint harness for AI-driven software development. Planner \u2192 Generator (Codex CLI) \u2192 Evaluator with quality gates and auto-semver.",
-    "version": "1.1.9",
+    "version": "1.1.10",
     "homepage": "https://github.com/YuSec2021/sprintfoundry"
   },
   "plugins": [
     {
       "name": "sprintfoundry",
       "description": "Three-agent GAN sprint harness (Planner \u2192 Codex Generator \u2192 Evaluator). Orchestrates any software project through CONTRACT \u2192 APPROVAL \u2192 IMPLEMENT \u2192 EVALUATE cycles with code quality gates, auto-versioning, and retry logic.",
-      "version": "1.1.9",
+      "version": "1.1.10",
       "author": {
         "name": "YuSec",
         "email": "gushangdianer@gmail.com"

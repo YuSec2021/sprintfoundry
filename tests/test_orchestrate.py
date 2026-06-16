@@ -13,6 +13,7 @@ EVAL_RESULTS_DIR = Path(".sprintfoundry") / "eval-results"
 RUN_STATE = STATE_DIR / "run-state.json"
 EVAL_TRIGGER = STATE_DIR / "eval-trigger.txt"
 SPRINT_FENCE = STATE_DIR / "sprint-fence.json"
+SPRINT_PROMPT_DIR = STATE_DIR / "sprint_prompt"
 AUDIT_LOG = STATE_DIR / "harness-audit.ndjson"
 ORCHESTRATOR_LOG = STATE_DIR / "logs" / "orchestrator-log.ndjson"
 RUN_EVENTS = STATE_DIR / "logs" / "run-events.ndjson"
@@ -197,18 +198,19 @@ def test_codex_command_uses_modern_exec_when_version_is_new(monkeypatch) -> None
     from scripts import orchestrate
 
     monkeypatch.setattr(orchestrate, "codex_version_tuple", lambda: (0, 120, 0))
-    command = orchestrate.codex_command("Implement sprint")
+    command = orchestrate.codex_command(".sprintfoundry/sprint_prompt/sprint-1-implementation.md")
     assert "codex exec --sandbox workspace-write" in command
     assert "disk-full-read-access" in command
     assert "shell_environment_policy.inherit=all" in command
     assert "--skip-git-repo-check" in command
+    assert ".sprintfoundry/sprint_prompt/sprint-1-implementation.md" in command
 
 
 def test_codex_command_uses_legacy_exec_when_version_is_old(monkeypatch) -> None:
     from scripts import orchestrate
 
     monkeypatch.setattr(orchestrate, "codex_version_tuple", lambda: (0, 119, 9))
-    command = orchestrate.codex_command("Implement sprint")
+    command = orchestrate.codex_command(".sprintfoundry/sprint_prompt/sprint-1-implementation.md")
     assert command.startswith("codex -a never exec --skip-git-repo-check ")
 
 
@@ -216,18 +218,19 @@ def test_codex_command_uses_legacy_exec_when_version_is_unknown(monkeypatch) -> 
     from scripts import orchestrate
 
     monkeypatch.setattr(orchestrate, "codex_version_tuple", lambda: None)
-    command = orchestrate.codex_command("Implement sprint")
+    command = orchestrate.codex_command(".sprintfoundry/sprint_prompt/sprint-1-implementation.md")
     assert command.startswith("codex -a never exec --skip-git-repo-check ")
 
 
-def test_codex_command_quotes_prompt(monkeypatch) -> None:
+def test_codex_command_uses_prompt_file_not_inline_prompt(monkeypatch) -> None:
     from scripts import orchestrate
 
     monkeypatch.setattr(orchestrate, "codex_version_tuple", lambda: (0, 120, 0))
-    command = orchestrate.codex_command("Implement 'sprint' && rm -rf /")
+    command = orchestrate.codex_command(".sprintfoundry/sprint_prompt/sprint-1-retry.md")
     assert "Implement 'sprint' && rm -rf /" not in command
     assert "codex exec --sandbox workspace-write" in command
     assert "--skip-git-repo-check" in command
+    assert "Read the local SprintFoundry prompt file" in command
 
 
 # --- compress_progress tests ---
@@ -416,7 +419,7 @@ def test_implementation_routes_on_dedicated_sprint_branch(tmp_path: Path) -> Non
 
 
 def test_implementation_prompt_includes_stop_instruction(tmp_path: Path) -> None:
-    """The Codex prompt must explicitly stop after the commit request handoff."""
+    """The prompt file must explicitly stop after the commit request handoff."""
     write_spec(tmp_path / "planner-spec.json")
     (tmp_path / "sprint-contract.md").write_text(
         "## Sprint 1\nCONTRACT APPROVED\n", encoding="utf-8"
@@ -426,8 +429,12 @@ def test_implementation_prompt_includes_stop_instruction(tmp_path: Path) -> None
     payload = json.loads(result.stdout)
     assert payload["action"] == "invoke_codex_for_implementation"
     command = payload["command"] or ""
-    assert "STOP" in command, "Implementation prompt must include explicit STOP instruction"
-    assert "ONLY" in command, "Implementation prompt must say 'Sprint N ONLY'"
+    prompt_file = payload["prompt_file"]
+    prompt_text = (tmp_path / prompt_file).read_text(encoding="utf-8")
+    assert prompt_file.startswith(str(SPRINT_PROMPT_DIR)), prompt_file
+    assert prompt_file in command
+    assert "STOP" in prompt_text, "Implementation prompt must include explicit STOP instruction"
+    assert "ONLY" in prompt_text, "Implementation prompt must say 'Sprint N ONLY'"
 
 
 def test_check_only_does_not_write_state_logs_or_fence(tmp_path: Path) -> None:
@@ -446,6 +453,8 @@ def test_check_only_does_not_write_state_logs_or_fence(tmp_path: Path) -> None:
     assert not (tmp_path / RUN_EVENTS).exists()
     assert not (tmp_path / AUDIT_LOG).exists()
     assert not (tmp_path / SPRINT_FENCE).exists()
+    assert not (tmp_path / SPRINT_PROMPT_DIR).exists()
+    assert payload["prompt_file"].startswith(str(SPRINT_PROMPT_DIR))
 
 
 def test_pre_commit_uses_read_only_orchestrator_check() -> None:
@@ -506,11 +515,14 @@ def test_retry_prompt_inlines_eval_result_fail_details(tmp_path: Path) -> None:
     result = run_orchestrator(tmp_path, "--json")
     payload = json.loads(result.stdout)
     command = payload["command"] or ""
-    assert "Add CTA button on /home" in command, (
-        "retry prompt must inline the eval-result body so Codex has the "
-        "cited fixes even after the file is deleted"
+    prompt_text = (tmp_path / payload["prompt_file"]).read_text(encoding="utf-8")
+    assert payload["prompt_file"] in command
+    assert "Add CTA button on /home" not in command
+    assert "Add CTA button on /home" in prompt_text, (
+        "retry prompt file must include the eval-result body so Codex has "
+        "the cited fixes even after the file is deleted"
     )
-    assert "STOP" in command, "retry prompt must still include a STOP instruction"
+    assert "STOP" in prompt_text, "retry prompt must still include a STOP instruction"
 
 
 def test_next_round_after_retry_routes_to_evaluator(tmp_path: Path) -> None:

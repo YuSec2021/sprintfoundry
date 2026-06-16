@@ -109,7 +109,7 @@ Before writing code, reread only:
 
 - `planner-spec.json`
 - `sprint-contract.md`
-- the inlined Evaluator failure details when retrying
+- `.sprintfoundry/sprint_prompt/sprint-*-invoke-codex-for-retry.md` when retrying
 
 Do not treat old chat context as truth.
 
@@ -213,7 +213,7 @@ When invoked after SPRINT FAIL:
 
 - Fix only the cited Evaluator issues.
 - Do not depend on `.sprintfoundry/eval-results/eval-result-{N}.md` being present; Orchestrator may have
-  inlined it into the prompt and deleted the file.
+  inlined it into `.sprintfoundry/sprint_prompt/sprint-{N}-invoke-codex-for-retry.md` and deleted the file.
 - Keep the retry on the same sprint branch.
 - Write a retry commit request with:
 

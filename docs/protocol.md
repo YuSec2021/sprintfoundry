@@ -120,11 +120,12 @@ The goal is hands-off progress with explicit stop conditions, not infinite auton
   the next sprint — zeroes the counter. Otherwise the retry budget for a stubborn
   sprint would be silently unbounded.
 - When the Orchestrator routes to `invoke_codex_for_retry` it **inlines** the
-  body of `.sprintfoundry/eval-results/eval-result-{N}.md` into the Codex prompt and **deletes** the file
+  body of `.sprintfoundry/eval-results/eval-result-{N}.md` into the local prompt
+  file under `.sprintfoundry/sprint_prompt/` and **deletes** the eval-result file
   before Codex runs. This forces the next round to re-invoke the Evaluator on
   the retry commit instead of looping on a stale FAIL verdict. Codex must never
-  depend on the file still being on disk during the retry — the verdict lives
-  in the prompt.
+  depend on the eval-result file still being on disk during the retry — the
+  verdict lives in the prompt file.
 - The Orchestrator updates `last_run_at` on every routing decision.
 - The Orchestrator sets `mode`, `needs_human`, `active_branch`, and `last_failure_reason`.
 - Generator (Codex) must never write to `.sprintfoundry/run-state.json`.
@@ -324,7 +325,9 @@ initial entry in `.sprintfoundry/claude-progress.txt`.
 
 > Codex reads this file directly. The instructions below are Codex's operating rules.
 
-**Invoked by**: Orchestrator via `codex exec --sandbox workspace-write --skip-git-repo-check "..."`
+**Invoked by**: Orchestrator writes a prompt file under
+`.sprintfoundry/sprint_prompt/`, then calls Codex with a short wrapper command:
+`codex exec --sandbox workspace-write --skip-git-repo-check "Read the local SprintFoundry prompt file at ..."`
 
 **Output**: implemented code + updated `.sprintfoundry/claude-progress.txt` +
 `.sprintfoundry/commit-requests/sprint-{N}.json`.
@@ -764,26 +767,23 @@ planner-spec.json ready
 Orchestrator calls Codex via Bash. Standard invocation patterns:
 
 ```bash
-# Propose sprint contract
-codex exec --sandbox workspace-write \
-  -c 'sandbox_permissions=["disk-full-read-access"]' \
-  -c 'shell_environment_policy.inherit=all' \
-  --skip-git-repo-check \
-  "Read planner-spec.json. Propose sprint-contract.md for Sprint N. Follow AGENTS.md Generator rules."
+mkdir -p .sprintfoundry/sprint_prompt
 
-# Implement after contract approved
-codex exec --sandbox workspace-write \
-  -c 'sandbox_permissions=["disk-full-read-access"]' \
-  -c 'shell_environment_policy.inherit=all' \
-  --skip-git-repo-check \
-  "sprint-contract.md is approved. Implement Sprint N. Write a commit request. Do not run git commit or write .sprintfoundry/eval-trigger.txt. Follow AGENTS.md."
+# Write the full sprint-specific prompt to a local file first.
+cat > .sprintfoundry/sprint_prompt/sprint-N-implementation.md <<'EOF'
+sprint-contract.md is approved. Implement Sprint N ONLY.
+Write .sprintfoundry/commit-requests/sprint-N.json for Orchestrator commit.
+Do not run git commit or write .sprintfoundry/eval-trigger.txt.
+STOP after updating .sprintfoundry/claude-progress.txt.
+Follow AGENTS.md Generator rules.
+EOF
 
-# Fix after SPRINT FAIL
+# Then pass only the short file-reading wrapper to Codex.
 codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
-  "Sprint N failed. Read .sprintfoundry/eval-results/eval-result-N.md. Fix only the cited issues. Write a retry commit request. Do not run git commit or write .sprintfoundry/eval-trigger.txt."
+  "Read the local SprintFoundry prompt file at .sprintfoundry/sprint_prompt/sprint-N-implementation.md and follow it exactly. The file content is the authoritative prompt for this Codex run."
 ```
 
 ---

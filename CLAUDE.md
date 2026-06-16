@@ -131,11 +131,15 @@ Planner should include:
 ## Codex Commands
 
 ```bash
+mkdir -p .sprintfoundry/sprint_prompt
+cat > .sprintfoundry/sprint_prompt/sprint-N-action.md <<'EOF'
+<full SprintFoundry prompt for this Codex run>
+EOF
 codex exec --sandbox workspace-write \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
-  "<prompt>"
+  "Read the local SprintFoundry prompt file at .sprintfoundry/sprint_prompt/sprint-N-action.md and follow it exactly. The file content is the authoritative prompt for this Codex run."
 ```
 
 ## Hard Rules
