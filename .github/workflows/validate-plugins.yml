@@ -5,11 +5,17 @@ on:
     branches: [main]
     paths:
       - 'plugins/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.claude/agents/**'
       - '.claude-plugin/marketplace.json'
   pull_request:
     branches: [main]
     paths:
       - 'plugins/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.claude/agents/**'
       - '.claude-plugin/marketplace.json'
 
 jobs:
@@ -19,6 +25,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check agent-copy consistency
+        run: bash scripts/check-agent-sync.sh
+
+      - name: Run orchestrator tests
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest -q
 
       - name: Validate marketplace.json
         run: |

@@ -7,7 +7,7 @@ description: Maintain observability, unattended loop state, escalation summaries
 
 Use this skill when working on the Claude + Codex sprint harness and you need to:
 
-- create or update `.sprintfoundry/run-state.json`
+- create or update `.sprintfoundry/state/run-state.json`
 - append `.sprintfoundry/logs/run-events.ndjson`
 - append `.sprintfoundry/logs/orchestrator-log.ndjson`
 - write or refresh `human-escalation.md`
@@ -21,10 +21,10 @@ This skill is for harness operations, not product code.
 Read only the minimum needed:
 
 - `planner-spec.json`
-- `.sprintfoundry/run-state.json` if present
+- `.sprintfoundry/state/run-state.json` if present
 - `.sprintfoundry/claude-progress.txt` if present
 - `sprint-contract.md` if present
-- latest `.sprintfoundry/eval-results/eval-result-{N}.md` relevant to the current sprint
+- latest `.sprintfoundry/results/eval/eval-result-{N}.md` relevant to the current sprint
 
 If you need field details or event names, read:
 
@@ -52,9 +52,9 @@ Determine:
 
 Prefer file artifacts over chat history.
 
-### 2. Update `.sprintfoundry/run-state.json`
+### 2. Update `.sprintfoundry/state/run-state.json`
 
-Keep `.sprintfoundry/run-state.json` minimal and machine-readable.
+Keep `.sprintfoundry/state/run-state.json` minimal and machine-readable.
 
 Always set or refresh:
 
@@ -135,7 +135,7 @@ Pause unattended execution instead of retrying forever when:
 
 When pausing:
 
-- update `.sprintfoundry/run-state.json`
+- update `.sprintfoundry/state/run-state.json`
 - append pause events
 - write `human-escalation.md`
 - add a brief pause note to `.sprintfoundry/claude-progress.txt`
@@ -150,7 +150,7 @@ When pausing:
 
 ## File roles
 
-- `.sprintfoundry/run-state.json`: current machine-readable state
+- `.sprintfoundry/state/run-state.json`: current machine-readable state
 - `.sprintfoundry/logs/run-events.ndjson`: append-only system event stream
 - `.sprintfoundry/logs/orchestrator-log.ndjson`: append-only routing audit trail
 - `human-escalation.md`: current human takeover summary

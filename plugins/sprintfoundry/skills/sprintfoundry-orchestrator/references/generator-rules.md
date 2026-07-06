@@ -24,9 +24,9 @@ After `init.sh`, Codex runs one smoke test before touching any code.
 
 ### Step 1 — Identify current sprint
 Lowest-numbered sprint in `planner-spec.json` with no
-`.sprintfoundry/eval-results/eval-result-N.md` containing `SPRINT PASS`.
+`.sprintfoundry/results/eval/eval-result-N.md` containing `SPRINT PASS`.
 Legacy root-level eval-result files may be read during migration, but new
-Evaluator output belongs in `.sprintfoundry/eval-results/`.
+Evaluator output belongs in `.sprintfoundry/results/eval/`.
 
 ### Step 2 — Propose sprint contract (if `sprint-contract.md` absent)
 
@@ -41,18 +41,17 @@ After writing `sprint-contract.md`, stop. Orchestrator routes to Evaluator for c
 
 ### Step 3 — Implement (only after `sprint-contract.md` contains "CONTRACT APPROVED")
 
-Before writing any code:
-```bash
-sha256sum sprint-contract.md > sprint-contract.md.sha256
-```
-
-If `sprint-contract.md` changes after this checksum (mismatch detected), stop and surface to Orchestrator.
+Contract-tamper enforcement is Orchestrator-owned via the fence
+(`.sprintfoundry/state/sprint-fence.json` records the approved contract's
+sha256 and it is re-verified at commit time). Codex may keep a courtesy
+self-check; on any mid-session contract change, stop and surface to the
+Orchestrator.
 
 - Read `planner-spec.json` for VDL and architecture constraints
 - Write tests alongside implementation — never after
 - No inline styles in React/frontend components
 - Do not carry forward abstractions unless required by current sprint
-- Check that implementation branch matches `.sprintfoundry/run-state.json active_branch`
+- Check that implementation branch matches `.sprintfoundry/state/run-state.json active_branch`
 
 **Step 4a — 静态分析（强制，失败则不得请求 commit）**
 
@@ -85,7 +84,7 @@ npx jest --coverage --coverageThreshold='{"global":{"lines":THRESHOLD}}'
 uv run --python <project-python-version> --with pytest --with pytest-cov pytest --cov=. --cov-fail-under=THRESHOLD -q
 ```
 
-覆盖率阈值（读取 `.sprintfoundry/run-state.json current_sprint` 和 `sprint_origin`）：
+覆盖率阈值（读取 `.sprintfoundry/state/run-state.json current_sprint` 和 `sprint_origin`）：
 - Sprint 1–3：50% · Sprint 4+：70% · bugfix sprint：80%
 
 覆盖率不达标时补写单测，不得降低阈值。
@@ -109,46 +108,43 @@ git diff --stat     # 确认变更范围未越界
 ### Step 5 — Commit request (Orchestrator owns Git)
 
 Codex may be unable to write `.git/index.lock` inside the sandbox. It must not
-run `git add`, `git commit`, or write `.sprintfoundry/eval-trigger.txt`. Instead it prepares a
+run `git add`, `git commit`, or write `.sprintfoundry/signals/eval-trigger.txt`. Instead it prepares a
 commit request:
 
 ```bash
-mkdir -p .sprintfoundry/commit-requests
-CONTRACT_SHA="$(cut -d' ' -f1 sprint-contract.md.sha256)"
-cat > ".sprintfoundry/commit-requests/sprint-<N>.json" <<JSON
+mkdir -p .sprintfoundry/signals/commit-requests
+cat > ".sprintfoundry/signals/commit-requests/sprint-<N>.json" <<JSON
 {
   "sprint": <N>,
   "attempt": "initial",
-  "contract_sha256": "$CONTRACT_SHA",
   "commit_message": "feat(sprint-<N>): <imperative description, 72 chars max>",
   "changed_files": ["<relative paths>"],
   "tests": [{"command": "uv run --python <project-python-version> --with pytest pytest -q", "status": "passed"}]
 }
 JSON
-rm -f sprint-contract.md.sha256
 echo "## Sprint <N> — $(date '+%Y-%m-%d %H:%M')" >> .sprintfoundry/claude-progress.txt
 echo "Status: implementation ready, pending Orchestrator commit" >> .sprintfoundry/claude-progress.txt
 ```
 
 **Stop immediately after writing the commit request and progress update.** Do
 not read `planner-spec.json` for the next sprint. Do not create a new branch.
-The Orchestrator commits, writes `.sprintfoundry/eval-trigger.txt`, and advances routing.
+The Orchestrator commits, writes `.sprintfoundry/signals/eval-trigger.txt`, and advances routing.
 
 ---
 
 ## Handling SPRINT FAIL (retry invocation)
 
-1. Read the retry instructions from `.sprintfoundry/sprint_prompt/sprint-N-invoke-codex-for-retry.md` (Orchestrator inlines the Evaluator verdict there before deleting the stale eval-result)
+1. Read the retry instructions from `.sprintfoundry/prompts/sprint-N/attempt-K-invoke-codex-for-retry.md` (the Orchestrator inlines a verdict digest there and archives the full eval-result to `.sprintfoundry/archive/sprint-N/`)
 2. Fix **only** what the Evaluator cited
-3. Write `.sprintfoundry/commit-requests/sprint-N.json` with `attempt: "retry"` and `commit_message: "fix(sprint-N): address evaluator failure"`
+3. Write `.sprintfoundry/signals/commit-requests/sprint-N.json` with `attempt: "retry"` and `commit_message: "fix(sprint-N): address evaluator failure"`
 4. Update `.sprintfoundry/claude-progress.txt` with "pending Orchestrator commit"
 5. Stop immediately
 
 ---
 
-## .sprintfoundry/sprint-fence.json
+## .sprintfoundry/state/sprint-fence.json
 
-Before implementation, the Orchestrator writes `.sprintfoundry/sprint-fence.json`:
+Before implementation, the Orchestrator writes `.sprintfoundry/state/sprint-fence.json`:
 ```json
 { "sprint": N, "base_commit": "<sha>" }
 ```
@@ -171,7 +167,7 @@ If this file exists, Codex is authorised to implement **only** the sprint named 
 ```
 
 The Orchestrator confirms the active sprint branch before committing and writing
-`.sprintfoundry/eval-trigger.txt`.
+`.sprintfoundry/signals/eval-trigger.txt`.
 
 ---
 
@@ -182,8 +178,8 @@ The Orchestrator confirms the active sprint branch before committing and writing
 - Never begin coding before "CONTRACT APPROVED" is in `sprint-contract.md`
 - Never remove or modify existing tests
 - Never request a commit with failing tests
-- Never run `git add`, `git commit`, or write `.sprintfoundry/eval-trigger.txt`
+- Never run `git add`, `git commit`, or write `.sprintfoundry/signals/eval-trigger.txt`
 - Use `git revert` (not patches) to recover from broken state
-- Never write to `.sprintfoundry/run-state.json`
+- Never write to `.sprintfoundry/state/run-state.json`
 - Never merge a sprint branch into `main` before Evaluator approval
 - Never start a new sprint on the previous sprint's branch

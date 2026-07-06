@@ -14,7 +14,7 @@
 3. [各语言工具配置](#3-各语言工具配置)
 4. [覆盖率阈值](#4-覆盖率阈值)
 5. [安全审计](#5-安全审计)
-6. [.sprintfoundry/quality-gates/quality-gate-N.md 格式](#6-sprintfoundryquality-gatesquality-gate-nmd-格式)
+6. [.sprintfoundry/results/quality/quality-gate-N.md 格式](#6-sprintfoundryquality-gatesquality-gate-nmd-格式)
 7. [失败处理](#7-失败处理)
 8. [Evaluator 如何使用质量门禁结果](#8-evaluator-如何使用质量门禁结果)
 
@@ -23,7 +23,7 @@
 ## 1. 在 Sprint 门控中的位置
 
 ```
-③ IMPLEMENT (Codex writes commit request; Orchestrator commits + writes .sprintfoundry/eval-trigger.txt)
+③ IMPLEMENT (Codex writes commit request; Orchestrator commits + writes .sprintfoundry/signals/eval-trigger.txt)
         │
         ▼
    Rule 2.1: QUALITY GATE  ◀── 新增阶段
@@ -43,11 +43,11 @@
 
 ## 2. 质量门禁脚本
 
-Orchestrator 在检测到 `.sprintfoundry/eval-trigger.txt` 后、调用 Evaluator 前，运行此脚本：
+Orchestrator 在检测到 `.sprintfoundry/signals/eval-trigger.txt` 后、调用 Evaluator 前，运行此脚本：
 
 ```bash
 python3 - <<'PY'
-import json, pathlib, subprocess, sys, re, shutil
+import json, os, pathlib, subprocess, sys, re, shutil
 
 spec = json.loads(pathlib.Path("planner-spec.json").read_text()) \
        if pathlib.Path("planner-spec.json").exists() else {}
@@ -57,11 +57,24 @@ backend  = stack.get("backend",  "").lower()
 
 results = {}   # tool -> {"passed": bool, "output": str}
 
+# Directories that must never be scanned by any linter.
+SKIP_DIRS = (".git", "node_modules", ".venv", "venv", "dist", "build",
+             "__pycache__", ".sprintfoundry", ".next", "coverage")
+
 def run(cmd, **kwargs):
     r = subprocess.run(cmd, shell=True, capture_output=True, text=True, **kwargs)
     return r.returncode, (r.stdout + r.stderr).strip()
 
-trigger_path = pathlib.Path(".sprintfoundry/eval-trigger.txt")
+def has_files(*exts):
+    """True if the project contains at least one file with any of these
+    extensions, ignoring vendored/build directories."""
+    for ext in exts:
+        for p in pathlib.Path(".").rglob(f"*{ext}"):
+            if not any(part in SKIP_DIRS for part in p.parts):
+                return True
+    return False
+
+trigger_path = pathlib.Path(".sprintfoundry/signals/eval-trigger.txt")
 if not trigger_path.exists():
     trigger_path = pathlib.Path("eval-trigger.txt")  # legacy compatibility
 
@@ -129,12 +142,66 @@ if any(x in backend for x in ["python", "fastapi", "flask", "django", "poetry"])
     rc, out = run(f"{uv_prefix} --with pip-audit pip-audit --desc 2>&1 | tail -20")
     results["pip-audit"] = {"passed": rc == 0, "output": out}
 
+# ── Frontend assets: HTML / CSS / vanilla JS ─────────────────────────────────
+# These run by *file presence*, not tech_stack keyword, so plain static sites
+# (no framework) are still covered. Tools are fetched on demand via `npx --yes`.
+
+# HTML — htmlhint ships sane default rules, so it needs no project config.
+if has_files(".html", ".htm"):
+    rc, out = run(
+        'npx --yes htmlhint "**/*.html" "**/*.htm" '
+        '--ignore "node_modules/**" --ignore "dist/**" --ignore "build/**" '
+        '2>&1 | tail -20'
+    )
+    results["htmlhint"] = {"passed": rc == 0, "output": out}
+
+# CSS — stylelint requires a config. Use the project's if present; otherwise
+# write a self-contained ruleset (no `extends`, so no extra packages needed)
+# under .sprintfoundry/ to avoid polluting the project root.
+if has_files(".css"):
+    project_cfgs = [".stylelintrc", ".stylelintrc.json", ".stylelintrc.js",
+                    ".stylelintrc.cjs", ".stylelintrc.yaml", ".stylelintrc.yml",
+                    "stylelint.config.js", "stylelint.config.cjs"]
+    cfg_flag = ""
+    if not any(pathlib.Path(c).exists() for c in project_cfgs):
+        cfg = pathlib.Path(".sprintfoundry/results/quality/.stylelintrc.json")
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(json.dumps({
+            "rules": {
+                "color-no-invalid-hex": True,
+                "block-no-empty": True,
+                "no-duplicate-selectors": True,
+                "no-invalid-double-slash-comments": True,
+                "property-no-unknown": True,
+                "unit-no-unknown": True,
+                "declaration-block-no-duplicate-properties": True,
+                "declaration-block-no-shorthand-property-overrides": True
+            }
+        }))
+        cfg_flag = f'--config "{cfg}"'
+    rc, out = run(
+        f'npx --yes stylelint "**/*.css" {cfg_flag} '
+        '--ignore-pattern "node_modules/**" --ignore-pattern "dist/**" '
+        '--ignore-pattern "build/**" 2>&1 | tail -20'
+    )
+    results["stylelint"] = {"passed": rc == 0, "output": out}
+
+# Vanilla JS — only when the framework branch above did NOT already lint JS.
+# Relies on the project's ESLint config (Generator establishes one in Sprint 1);
+# if absent, ESLint reports it and the gate fails loudly rather than silently
+# skipping JS quality.
+if has_files(".js", ".mjs", ".cjs") and "eslint" not in results:
+    rc, out = run(
+        "npx --yes eslint . --ext .js,.mjs,.cjs --max-warnings=0 2>&1 | tail -20"
+    )
+    results["eslint-js"] = {"passed": rc == 0, "output": out}
+
 # ── 兜底：如果未能识别任何栈，只跑 git diff stat ─────────────────────────────
 if not results:
     rc, out = run("git diff HEAD~1..HEAD --stat 2>&1")
     results["git-diff-stat"] = {"passed": True, "output": out}
 
-# 写结果文件。新文件统一放在 .sprintfoundry/quality-gates/，避免污染项目根目录。
+# 写结果文件。新文件统一放在 .sprintfoundry/results/quality/，避免污染项目根目录。
 passed_all = all(v["passed"] for v in results.values())
 lines = [f"# Quality Gate — Sprint {sprint_n}"]
 lines.append(f"\n**Verdict: {'PASS' if passed_all else 'FAIL'}**\n")
@@ -198,11 +265,32 @@ uv run --python <version> --with pytest --with pytest-cov pytest --cov=. --cov-f
 `flake8`、`mypy`、`pip-audit` 同样用 `uv run --python <version> --with <tool>`，
 不要安装到系统 Python，也不要使用 `--break-system-packages`。
 
+### 前端静态资源（HTML / CSS / 原生 JavaScript）
+
+这一组检查**按文件存在性触发**（而非 `tech_stack` 关键词），因此即便是不带
+框架的纯静态站点也能覆盖。工具通过 `npx --yes` 按需拉取。
+
+| 工具 | 用途 | 触发条件 | 失败条件 |
+|------|------|---------|---------|
+| htmlhint | HTML 结构/属性检查 | 存在 `*.html` / `*.htm` | 任何 htmlhint 默认规则报错 |
+| stylelint | CSS 语法/规则检查 | 存在 `*.css` | 任何 error 级规则报错 |
+| eslint (vanilla) | 原生 JS 检查（`.js/.mjs/.cjs`）| 存在 JS 文件且上文框架分支**未**跑过 ESLint | 任何 warning（`--max-warnings=0`）|
+
+要点：
+
+- **htmlhint** 自带默认规则集，无需项目配置即可运行。
+- **stylelint** 需要配置：优先使用项目自带的 `.stylelintrc*` / `stylelint.config.*`；
+  若不存在，门禁会在 `.sprintfoundry/results/quality/.stylelintrc.json` 写入一份
+  自包含规则集（不含 `extends`，无需额外安装配置包），不污染项目根目录。
+- **原生 JS 的 ESLint** 复用项目的 ESLint 配置（Generator 应在 Sprint 1 建立）。
+  与框架分支的 ESLint 互斥：若框架分支已跑过 `eslint`，这里不再重复执行。
+- 所有前端检查都会跳过 `node_modules`、`dist`、`build`、`.git` 等目录。
+
 ### 其他栈
 
-若 `planner-spec.json` 中的 `tech_stack` 未覆盖以上两类，Orchestrator 记录
-`.sprintfoundry/quality-gates/quality-gate-N.md` 为"栈未识别，跳过静态分析"，**不因此失败**，但 Evaluator
-须在 Craft 评分中注记"缺少静态分析覆盖"并适当扣分。
+若某栈既不属于上述 Python / JS-TS / 前端三类（例如 Go、Rust、Java），
+Orchestrator 记录 `.sprintfoundry/results/quality/quality-gate-N.md` 为"栈未识别，跳过静态分析"，
+**不因此失败**，但 Evaluator 须在 Craft 评分中注记"缺少静态分析覆盖"并适当扣分。
 
 ---
 
@@ -214,7 +302,7 @@ uv run --python <version> --with pytest --with pytest-cov pytest --cov=. --cov-f
 | Sprint 4+ | 70% | 核心功能稳定后收紧 |
 | bugfix sprint | 80% | 修复代码必须有对应测试 |
 
-Sprint 编号从 `.sprintfoundry/run-state.json.current_sprint` 读取。
+Sprint 编号从 `.sprintfoundry/state/run-state.json.current_sprint` 读取。
 阈值判断逻辑内嵌于质量门禁脚本：
 
 ```python
@@ -242,14 +330,14 @@ uv run --python <project-python-version> --with pip-audit pip-audit --desc
 ### 失败处理
 安全漏洞失败 **不计入 quality_retry_count**——因为漏洞修复通常需要升级依赖，
 可能超出当前 sprint 范围。Orchestrator 应：
-1. 记录漏洞详情到 `.sprintfoundry/quality-gates/quality-gate-N.md`
+1. 记录漏洞详情到 `.sprintfoundry/results/quality/quality-gate-N.md`
 2. 自动生成 `change-request.md Type: minor_feature` 描述需要升级的包
 3. 将当前 sprint 标记为通过（漏洞单独处理）
 4. 在 `.sprintfoundry/claude-progress.txt` 注记：`[SECURITY] Sprint N 遗留漏洞，已创建 change-request`
 
 ---
 
-## 6. .sprintfoundry/quality-gates/quality-gate-N.md 格式
+## 6. .sprintfoundry/results/quality/quality-gate-N.md 格式
 
 ```markdown
 # Quality Gate — Sprint {N}
@@ -296,13 +384,13 @@ Orchestrator 将此文件路径传递给 Evaluator，Evaluator 读取后纳入 C
 
 ```
 Sprint {N} 的代码质量检查失败。
-请阅读 .sprintfoundry/quality-gates/quality-gate-{N}.md，修复所有标记为 ❌ 的问题：
+请阅读 .sprintfoundry/results/quality/quality-gate-{N}.md，修复所有标记为 ❌ 的问题：
 - lint 错误：修复所有报告的代码风格和语法问题
 - 类型错误：补全缺失的类型标注，修复类型不匹配
 - 覆盖率不足：为未覆盖的分支补写单测
 不要修改已通过的功能逻辑，只修复质量问题。
-修复完成后写 .sprintfoundry/commit-requests/sprint-{N}.json，
-attempt 使用 "quality_retry"。不要运行 git commit，不要改 `.sprintfoundry/eval-trigger.txt`。
+修复完成后写 .sprintfoundry/signals/commit-requests/sprint-{N}.json，
+attempt 使用 "quality_retry"。不要运行 git commit，不要改 `.sprintfoundry/signals/eval-trigger.txt`。
 STOP 后不要执行其他操作。
 ```
 
@@ -310,7 +398,7 @@ STOP 后不要执行其他操作。
 
 ```
 quality_retry_count > 2
-→ set `.sprintfoundry/run-state.json`: mode="paused", needs_human=true
+→ set `.sprintfoundry/state/run-state.json`: mode="paused", needs_human=true
   last_failure_reason="quality gate failed after 2 retries — sprint {N}"
   append to `.sprintfoundry/claude-progress.txt`: "PAUSED: 质量门禁连续失败，需人工介入"
 ```
@@ -319,11 +407,11 @@ quality_retry_count > 2
 
 ## 8. Evaluator 如何使用质量门禁结果
 
-Evaluator 在 CHECK 阶段开始前读取 `.sprintfoundry/quality-gates/quality-gate-{N}.md`（若存在）。
+Evaluator 在 CHECK 阶段开始前读取 `.sprintfoundry/results/quality/quality-gate-{N}.md`（若存在）。
 质量门禁脚本会把旧版根目录 `quality-gate-*.md` 迁移到该目录；旧根目录读取仅作为迁移兼容兜底，新文件不得再写到项目根目录。
 
 ```bash
-cat .sprintfoundry/quality-gates/quality-gate-{N}.md 2>/dev/null \
+cat .sprintfoundry/results/quality/quality-gate-{N}.md 2>/dev/null \
   || cat quality-gate-{N}.md 2>/dev/null \
   || echo "[no quality gate result]"
 ```

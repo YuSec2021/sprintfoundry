@@ -12,7 +12,7 @@ This skill covers:
 - creating a branch for a new sprint
 - switching to the correct sprint branch
 - keeping retries on the same sprint branch
-- recording `active_branch` and `base_branch` in `.sprintfoundry/run-state.json`
+- recording `active_branch` and `base_branch` in `.sprintfoundry/state/run-state.json`
 - deciding when a sprint branch is ready to merge
 
 This skill is for harness Git workflow, not for product code.
@@ -45,7 +45,7 @@ Use a short slug derived from the sprint title in `planner-spec.json`.
 Read:
 
 - `planner-spec.json`
-- `.sprintfoundry/run-state.json` if present
+- `.sprintfoundry/state/run-state.json` if present
 - current Git branch
 
 Determine:
@@ -63,7 +63,7 @@ Before implementation:
 - if it exists, switch to it
 - confirm `git branch --show-current` matches the target branch
 
-If unattended mode is active, update `.sprintfoundry/run-state.json`:
+If unattended mode is active, update `.sprintfoundry/state/run-state.json`:
 
 - `active_branch`
 - `base_branch`
@@ -83,7 +83,7 @@ When the next sprint starts:
 
 - create a new branch
 - do not reuse the previous sprint branch
-- update `.sprintfoundry/run-state.json` to the new branch
+- update `.sprintfoundry/state/run-state.json` to the new branch
 
 ### 5. Merge readiness and execution
 
@@ -112,7 +112,7 @@ These are left by crashed git processes and are safe to delete when no git opera
 
 **Merge failure handling:**
 - Orchestrator retries up to 3 times (5 s / 10 s / 15 s backoff).
-- If all retries fail: `needs_human=true` is set in `.sprintfoundry/run-state.json` with the exact recovery command.
+- If all retries fail: `needs_human=true` is set in `.sprintfoundry/state/run-state.json` with the exact recovery command.
 - Sprint code is NOT lost — it remains on the sprint branch until the merge is completed.
 
 If a sprint is re-planned instead of completed:
@@ -123,7 +123,7 @@ If a sprint is re-planned instead of completed:
 ## Output rules
 
 - Prefer explicit branch naming over implicit current-branch assumptions
-- Keep branch state synchronized with `.sprintfoundry/run-state.json`
+- Keep branch state synchronized with `.sprintfoundry/state/run-state.json`
 - Never implement a new sprint directly on `main`
 - Never merge a sprint branch before evaluator approval
 - Never create multiple concurrent branches for the same sprint unless the harness explicitly introduces parallel sprint execution

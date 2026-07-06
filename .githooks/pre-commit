@@ -4,7 +4,7 @@
 # Enforces the monotonic-PASS invariant at Git layer:
 #   A commit that touches code inside a sprint boundary is only allowed if
 #   every strictly-earlier sprint in planner-spec.json has a
-#   .sprintfoundry/eval-results/eval-result-{N}.md containing "SPRINT PASS".
+#   .sprintfoundry/results/eval/eval-result-{N}.md containing "SPRINT PASS".
 #
 # This blocks the two historical failure modes observed in this repo:
 #   1. A "feat(sprint-N): ..." commit landing before Evaluator ran Sprint N-1
@@ -63,7 +63,7 @@ sys.exit(0 if d.get('rule') != 'sprint_history_inconsistent' else 1)
         echo ""
         echo "  ✗ blocked by harness-pre-commit (sprint_history_inconsistent)."
         echo "    A sprint-advance commit requires every earlier sprint to have"
-        echo "    .sprintfoundry/eval-results/eval-result-{N}.md containing 'SPRINT PASS'."
+        echo "    .sprintfoundry/results/eval/eval-result-{N}.md containing 'SPRINT PASS'."
         echo "    See 'python3 scripts/orchestrate.py --check-only --json' for details."
         echo "    Emergency bypass: HARNESS_BYPASS=1 git commit ..."
         audit_log commit_blocked \
@@ -96,8 +96,9 @@ spec = json.loads(spec_path.read_text())
 
 passed = set()
 paths = [
-    *pathlib.Path(".").glob(".sprintfoundry/eval-results/eval-result-*.md"),
-    *pathlib.Path(".").glob("eval-result-*.md"),
+    *pathlib.Path(".").glob(".sprintfoundry/results/eval/eval-result-*.md"),
+    *pathlib.Path(".").glob(".sprintfoundry/eval-results/eval-result-*.md"),  # legacy
+    *pathlib.Path(".").glob("eval-result-*.md"),  # legacy
 ]
 for p in paths:
     sid_str = p.stem.split("-")[-1]

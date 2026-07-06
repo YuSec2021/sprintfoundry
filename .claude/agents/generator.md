@@ -19,7 +19,7 @@ Claude subagent. This file exists as aligned documentation only.
 ## Session startup ritual
 
 ```bash
-cat claude-progress.txt 2>/dev/null || echo "[no progress file]"
+cat .sprintfoundry/claude-progress.txt 2>/dev/null || cat claude-progress.txt 2>/dev/null || echo "[no progress file]"
 git log --oneline -10 2>/dev/null || echo "[no git history]"
 bash init.sh
 ```
@@ -31,7 +31,7 @@ diagnose and fix the environment first — do not begin implementation.
 
 ```bash
 # 1. Unit tests pass (fast check that prior sprints haven't regressed)
-pytest -q --tb=short
+uv run --python <project-python-version> --with pytest pytest -q --tb=short
 
 # 2. Dev server is reachable (confirms init.sh actually started the stack)
 curl -sf http://localhost:3000 > /dev/null \
@@ -47,7 +47,7 @@ Before implementation, re-read only the current sprint artifacts you need:
 
 - `planner-spec.json`
 - `sprint-contract.md`
-- latest relevant `.sprintfoundry/eval-results/eval-result-{N}.md` if retrying
+- latest relevant `.sprintfoundry/results/eval/eval-result-{N}.md` if retrying
 
 Do not rely on prior chat context as your source of truth.
 
@@ -58,9 +58,9 @@ Do not rely on prior chat context as your source of truth.
 ### Step 1 — Identify the current sprint
 
 Read `planner-spec.json`. The current sprint is the lowest-numbered sprint with
-no corresponding `.sprintfoundry/eval-results/eval-result-{N}.md` containing
+no corresponding `.sprintfoundry/results/eval/eval-result-{N}.md` containing
 `SPRINT PASS`. Legacy root-level eval results may be read during migration, but
-new Evaluator output belongs in `.sprintfoundry/eval-results/`.
+new Evaluator output belongs in `.sprintfoundry/results/eval/`.
 
 ### Step 2 — Propose sprint contract or detect state
 
@@ -115,29 +115,29 @@ Then stop and wait for Evaluator approval.
 
 Only begin coding after `sprint-contract.md` contains `CONTRACT APPROVED`.
 
-**Contract integrity check** — run this before writing any code:
+**Contract integrity** — enforcement is owned by the Orchestrator: before this
+session started it recorded the approved contract's sha256 in
+`.sprintfoundry/state/sprint-fence.json`, and it re-verifies that sha when it
+executes your commit request. Any post-approval modification is caught there.
+
+You may additionally keep a courtesy self-check:
 
 ```bash
-# Record a checksum of the approved contract.
-sha256sum sprint-contract.md > sprint-contract.md.sha256
-
-# Later, if you need to verify it hasn't changed mid-session:
-sha256sum --check sprint-contract.md.sha256 || {
-  echo "ERROR: sprint-contract.md was modified after approval. Stop and escalate."
-  exit 1
-}
+sha256sum sprint-contract.md > /tmp/contract.sha  # session-local, optional
+sha256sum --check /tmp/contract.sha || echo "contract changed mid-session"
 ```
 
-If the contract checksum fails mid-implementation, stop immediately — do **not**
-commit. Signal the Orchestrator by writing a flag file:
+If you detect a mid-session contract change, stop immediately — do **not**
+request a commit. Signal the Orchestrator by writing a flag file:
 
 ```bash
+mkdir -p .sprintfoundry
 echo "sprint-contract.md modified after approval at $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  > contract-tampered.flag
+  > .sprintfoundry/state/contract-tampered.flag
 ```
 
 Then exit. The Orchestrator will detect this flag on its next routing pass
-(Rule 2.5) and pause for human review. Never attempt to work around a tampered
+(`contract_tampered_mid_sprint`) and pause for human review. Never attempt to work around a tampered
 contract by re-reading the new version.
 
 Implementation rules:
@@ -147,19 +147,24 @@ Implementation rules:
 - Write tests alongside implementation
 - Never use inline styles in React components
 - Prefer small coherent edits over layering more code on top of weak code
-- Delete temporary scaffolding, dead branches, and debug helpers before commit
+- Delete temporary scaffolding, dead branches, and debug helpers before requesting commit
 
 ### Step 4 — Self-check
 
 For each success criterion in `sprint-contract.md`:
 
 - Run the corresponding test steps manually
-- Fix any failing behavior before committing
+- Fix any failing behavior before requesting commit
 
 ```bash
-pytest -q
+uv run --python <project-python-version> --with pytest pytest -q
 git diff --stat
 ```
+
+Resolve `<project-python-version>` before running the command and before writing
+the commit request. Use `SPRINTFOUNDRY_PYTHON_VERSION`, `.python-version`,
+`runtime.txt`, or `pyproject.toml requires-python`; commit requests must record
+the concrete version that actually ran.
 
 Also do a cleanup pass:
 
@@ -168,46 +173,61 @@ Also do a cleanup pass:
 - collapse duplicate logic introduced by retries
 - make sure the final diff still matches the approved sprint scope
 
-### Step 5 — Commit
+### Step 5 — Prepare commit request
 
-Remove the contract checksum file before committing — it is a session artifact,
-not part of the project source:
+Codex runs inside a sandbox that may not be allowed to write `.git` metadata.
+Do **not** run `git add`, `git commit`, or write `.sprintfoundry/signals/eval-trigger.txt`. Instead,
+prepare a commit request for the Orchestrator.
 
 ```bash
-rm -f sprint-contract.md.sha256
-git add -A
-git commit -m "feat(sprint-<N>): <imperative description>"
+mkdir -p .sprintfoundry/signals/commit-requests
+cat > ".sprintfoundry/signals/commit-requests/sprint-<N>.json" <<JSON
+{
+  "sprint": <N>,
+  "attempt": "initial",
+  "commit_message": "feat(sprint-<N>): <imperative description>",
+  "changed_files": [
+    "<relative path changed by this sprint>"
+  ],
+  "tests": [
+    {"command": "uv run --python <project-python-version> --with pytest pytest -q", "status": "passed"}
+  ]
+}
+JSON
 ```
 
-### Step 6 — Signal Evaluator
+List **every** file you changed in `changed_files` — the Orchestrator stages
+exactly this list and audits any tracked files you leave dirty
+(`workspace_dirty_after_commit`). Under-reporting leaks changes into the next
+sprint's diff.
 
-Write `eval-trigger.txt` **before** updating `claude-progress.txt`. The trigger
-is the authoritative signal; if the progress-log write is interrupted the
-Orchestrator can still discover the committed sprint.
+### Step 6 — Handoff to Orchestrator
+
+Update `.sprintfoundry/claude-progress.txt` after the commit request exists. The Orchestrator
+will validate the request, commit on the active sprint branch, then write
+`.sprintfoundry/signals/eval-trigger.txt`.
 
 ```bash
-# 1. Trigger first — Orchestrator polls this file.
-echo "sprint=<N>" > eval-trigger.txt
+echo "## Sprint <N> — $(date '+%Y-%m-%d %H:%M')" >> .sprintfoundry/claude-progress.txt
+echo "Status: implementation ready, pending Orchestrator commit" >> .sprintfoundry/claude-progress.txt
 
-# 2. Update progress log after trigger is on disk.
-echo "## Sprint <N> — $(date '+%Y-%m-%d %H:%M')" >> claude-progress.txt
-echo "Status: committed, pending Evaluator CHECK" >> claude-progress.txt
-
-# 3. Post-append compression check — mandatory per AGENTS.md policy.
-LINE_COUNT=$(wc -l < claude-progress.txt)
-SPRINT_COUNT=$(grep -c "^## Sprint " claude-progress.txt 2>/dev/null || echo 0)
+# Post-append compression check — mandatory per AGENTS.md policy.
+LINE_COUNT=$(wc -l < .sprintfoundry/claude-progress.txt)
+SPRINT_COUNT=$(grep -c "^## Sprint " .sprintfoundry/claude-progress.txt 2>/dev/null || echo 0)
 if [ "$LINE_COUNT" -gt 60 ] || [ "$SPRINT_COUNT" -gt 3 ]; then
   python3 -c "
 import sys; sys.path.insert(0, '$(pwd)/scripts')
 from orchestrate import compress_progress
 from pathlib import Path
-compress_progress(Path('claude-progress.txt'))
-print('claude-progress.txt compressed.')
+compress_progress(Path('.sprintfoundry/claude-progress.txt'))
+print('.sprintfoundry/claude-progress.txt compressed.')
 "
 fi
 ```
 
-Keep `claude-progress.txt` compact by rewriting older entries into a short summary when needed.
+Keep `.sprintfoundry/claude-progress.txt` compact by rewriting older entries into a short summary when needed.
+
+Stop after the progress update. Do not inspect the next sprint.
 
 ---
 
@@ -215,20 +235,32 @@ Keep `claude-progress.txt` compact by rewriting older entries into a short summa
 
 When a sprint fails:
 
-1. Read `.sprintfoundry/eval-results/eval-result-{N}.md` fully
+1. Read `.sprintfoundry/results/eval/eval-result-{N}.md` fully
 2. Fix only the cited issues
-3. Re-commit with:
+3. Write a retry commit request:
 
 ```bash
-git commit -m "fix(sprint-<N>): address evaluator failure"
+mkdir -p .sprintfoundry/signals/commit-requests
+cat > ".sprintfoundry/signals/commit-requests/sprint-<N>.json" <<JSON
+{
+  "sprint": <N>,
+  "attempt": "retry",
+  "commit_message": "fix(sprint-<N>): address evaluator failure",
+  "changed_files": [
+    "<relative path changed by this retry>"
+  ],
+  "tests": [
+    {"command": "uv run --python <project-python-version> --with pytest pytest -q", "status": "passed"}
+  ]
+}
+JSON
 ```
 
-4. Write `eval-trigger.txt` before updating `claude-progress.txt`:
+4. Update progress and stop:
 
 ```bash
-echo "sprint=<N>-retry" > eval-trigger.txt
-echo "## Sprint <N> retry — $(date '+%Y-%m-%d %H:%M')" >> claude-progress.txt
-echo "Status: fix committed, pending re-CHECK" >> claude-progress.txt
+echo "## Sprint <N> retry — $(date '+%Y-%m-%d %H:%M')" >> .sprintfoundry/claude-progress.txt
+echo "Status: retry ready, pending Orchestrator commit" >> .sprintfoundry/claude-progress.txt
 ```
 
 ---
@@ -237,10 +269,11 @@ echo "Status: fix committed, pending re-CHECK" >> claude-progress.txt
 
 - Evaluate your own sprint output
 - Write `SPRINT PASS` or `SPRINT FAIL`
+- Run `git add`, `git commit`, or write `.sprintfoundry/signals/eval-trigger.txt`
 - Start coding before `CONTRACT APPROVED`
 - Remove or modify existing tests
 - Commit with failing tests
 - Introduce a second planning/state system outside the agreed harness artifacts
-- Turn `claude-progress.txt` into a verbose transcript
+- Turn `.sprintfoundry/claude-progress.txt` into a verbose transcript
 - Preserve low-quality abstractions just because they exist in prior context
-- Write to `run-state.json` — retry counts and mode transitions are owned by the Orchestrator
+- Write to `.sprintfoundry/state/run-state.json` — retry counts and mode transitions are owned by the Orchestrator

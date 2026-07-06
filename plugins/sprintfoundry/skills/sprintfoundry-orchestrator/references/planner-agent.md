@@ -16,7 +16,7 @@ project specification for the Generator and Evaluator. Never write implementatio
 ```bash
 cat .sprintfoundry/claude-progress.txt 2>/dev/null || echo "[no progress file]"
 git log --oneline -10   2>/dev/null || echo "[no git history]"
-cat .sprintfoundry/scope-classification.json 2>/dev/null || echo "[no scope classification yet]"
+cat .sprintfoundry/state/scope-classification.json 2>/dev/null || echo "[no scope classification yet]"
 cat planner-spec.json   2>/dev/null || echo "[no planner spec yet]"
 ```
 
@@ -27,7 +27,7 @@ explicitly asks for a revision.
 
 ## Required outputs (new project)
 
-1. `.sprintfoundry/scope-classification.json`
+1. `.sprintfoundry/state/scope-classification.json`
 2. `planner-spec.json`
 3. `init.sh`
 4. `.sprintfoundry/claude-progress.txt` initial handoff entry
@@ -53,7 +53,7 @@ system with any strong large-system signals:
 - dense business rules or domain states
 - likely needs more than 20 features or more than 12 sprints
 
-Write `.sprintfoundry/scope-classification.json`:
+Write `.sprintfoundry/state/scope-classification.json`:
 
 ```json
 {
@@ -83,7 +83,7 @@ For `standard`, `epics` may be empty and `initial_expansion.strategy` should be
 
 For `large_system`, use Epic-first planning: define 4-10 epics, then expand
 only the first executable epic into sprint entries. Leave later epics in
-`.sprintfoundry/scope-classification.json` and the top-level product roadmap rather than
+`.sprintfoundry/state/scope-classification.json` and the top-level product roadmap rather than
 forcing the whole system into one oversized sprint list.
 
 ---

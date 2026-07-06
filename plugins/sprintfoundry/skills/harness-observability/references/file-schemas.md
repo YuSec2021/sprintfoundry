@@ -1,6 +1,6 @@
 # File Schemas
 
-## `.sprintfoundry/run-state.json`
+## `.sprintfoundry/state/run-state.json`
 
 Recommended shape:
 
@@ -73,8 +73,8 @@ Recommended sections:
 - Retry limit exceeded after repeated evaluator failures
 
 ## Files To Inspect
-- `.sprintfoundry/run-state.json`
-- `.sprintfoundry/eval-results/eval-result-3.md`
+- `.sprintfoundry/state/run-state.json`
+- `.sprintfoundry/results/eval/eval-result-3.md`
 - `sprint-contract.md`
 - `.sprintfoundry/claude-progress.txt`
 

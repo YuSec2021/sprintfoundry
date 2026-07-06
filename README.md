@@ -64,15 +64,15 @@ SprintFoundry uses a strict separation of responsibility:
 | Planner | Claude sub-agent | Classifies scope, then turns a request into product direction, verification mode, and sprint plan |
 | Generator | Codex CLI | Implements one approved sprint, self-checks, and writes a commit request |
 | Evaluator | Claude sub-agent + verification tools | Reviews contracts and verifies committed work through the configured external surface |
-| Orchestrator | `sprintfoundry-orchestrator` skill | Reads file state, invokes agents, owns Git commits and `.sprintfoundry/eval-trigger.txt`, and pauses on unsafe state |
+| Orchestrator | `sprintfoundry-orchestrator` skill | Reads file state, invokes agents, owns Git commits and `.sprintfoundry/signals/eval-trigger.txt`, and pauses on unsafe state |
 
 Important boundaries:
 
 - Claude does not write application code.
 - Codex does not evaluate its own output or write Git metadata.
-- `.sprintfoundry/eval-trigger.txt` is written only after the Orchestrator has committed the sprint.
+- `.sprintfoundry/signals/eval-trigger.txt` is written only after the Orchestrator has committed the sprint.
 - Progress advances through file artifacts, not chat memory.
-- A sprint is complete only when `.sprintfoundry/eval-results/eval-result-{N}.md` contains `SPRINT PASS`.
+- A sprint is complete only when `.sprintfoundry/results/eval/eval-result-{N}.md` contains `SPRINT PASS`.
 
 ## Main Flow
 
@@ -81,7 +81,7 @@ flowchart TD
     A["User request / continue sprint"] --> O["sprintfoundry-orchestrator"]
     O --> S["Read current file state"]
     S --> P{"planner-spec.json exists?"}
-    P -- no --> SC["Planner writes .sprintfoundry/scope-classification.json"]
+    P -- no --> SC["Planner writes .sprintfoundry/state/scope-classification.json"]
     SC --> PL["Planner creates spec, init.sh, progress log"]
     P -- yes --> C{"sprint-contract.md exists?"}
     C -- no --> NC["Codex proposes next sprint contract"]
@@ -89,7 +89,7 @@ flowchart TD
     A1 -- no --> CR["Evaluator reviews contract"]
     A1 -- yes --> G["Codex implements exactly one sprint"]
     G --> RQ["Codex writes commit request"]
-    RQ --> T["Orchestrator commits and writes .sprintfoundry/eval-trigger.txt"]
+    RQ --> T["Orchestrator commits and writes .sprintfoundry/signals/eval-trigger.txt"]
     T --> Q["Quality Gate: lint, types, tests, coverage, security"]
     Q -- fail --> QF["Codex fixes only quality-gate failures"]
     QF --> RQ
@@ -104,7 +104,7 @@ flowchart TD
 
 ## Planning Scale
 
-Before planning, SprintFoundry writes `.sprintfoundry/scope-classification.json` with a
+Before planning, SprintFoundry writes `.sprintfoundry/state/scope-classification.json` with a
 `planning_mode`:
 
 | Mode | Use when | Initial decomposition |
@@ -147,16 +147,16 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 
 | File | Owner | Purpose |
 | --- | --- | --- |
-| `.sprintfoundry/scope-classification.json` | Planner | Scale decision: `standard` or `large_system`, with evidence and epic outline |
+| `.sprintfoundry/state/scope-classification.json` | Planner | Scale decision: `standard` or `large_system`, with evidence and epic outline |
 | `planner-spec.json` | Planner | Product spec, design language, tech stack, verification mode, and sprint list |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint acceptance contract; code cannot start until approved |
-| `.sprintfoundry/sprint-fence.json` | Orchestrator | Expected sprint number and base commit before implementation starts |
-| `.sprintfoundry/sprint_prompt/sprint-{N}-{action}.md` | Orchestrator | Full Codex prompt for the current contract, implementation, or retry handoff; Codex CLI receives only a short command telling it to read this file |
-| `.sprintfoundry/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation |
-| `.sprintfoundry/eval-trigger.txt` | Orchestrator | Signal that a committed sprint is ready for quality gate and evaluation |
-| `.sprintfoundry/quality-gates/quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK |
-| `.sprintfoundry/eval-results/eval-result-{N}.md` | Evaluator | Sprint verdict and evidence; only `SPRINT PASS` completes a sprint |
-| `.sprintfoundry/run-state.json` | Orchestrator | Current mode, retry counters, active branch, pause state, version metadata |
+| `.sprintfoundry/state/sprint-fence.json` | Orchestrator | Expected sprint number and base commit before implementation starts |
+| `.sprintfoundry/prompts/sprint-{N}-{action}.md` | Orchestrator | Full Codex prompt for the current contract, implementation, or retry handoff; Codex CLI receives only a short command telling it to read this file |
+| `.sprintfoundry/signals/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation |
+| `.sprintfoundry/signals/eval-trigger.txt` | Orchestrator | Signal that a committed sprint is ready for quality gate and evaluation |
+| `.sprintfoundry/results/quality/quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK |
+| `.sprintfoundry/results/eval/eval-result-{N}.md` | Evaluator | Sprint verdict and evidence; only `SPRINT PASS` completes a sprint |
+| `.sprintfoundry/state/run-state.json` | Orchestrator | Current mode, retry counters, active branch, pause state, version metadata |
 | `.sprintfoundry/claude-progress.txt` | Generator + Orchestrator | Compact rolling handoff, not a transcript |
 | `change-request.md` | User + Orchestrator | Classified iteration request: bugfix, minor feature, major feature, or replan |
 | `bug-report.md` | User + Orchestrator | Dedicated regression intake for tightly scoped bugfix sprints |
@@ -164,7 +164,7 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 
 Runtime state lives under `.sprintfoundry/`. Legacy root-level `run-state.json`, `eval-trigger.txt`, `sprint-fence.json`, `eval-result-*.md`, and `quality-gate-*.md` may be migrated or read for compatibility, but new machine artifacts should not be written to the project root.
 
-Codex handoffs are file-backed: before invoking Codex, the Orchestrator writes the complete sprint-specific instructions to `.sprintfoundry/sprint_prompt/` and passes only a short "read this local prompt file" wrapper on the command line. Retry prompts also embed the Evaluator failure details in this file before stale eval-result files are removed, so retries do not depend on deleted state.
+Codex handoffs are file-backed: before invoking Codex, the Orchestrator writes the complete sprint-specific instructions to `.sprintfoundry/prompts/` and passes only a short "read this local prompt file" wrapper on the command line. Retry prompts also embed the Evaluator failure details in this file before stale eval-result files are removed, so retries do not depend on deleted state.
 
 ## Quality Gate
 
@@ -178,7 +178,7 @@ Depending on the detected stack, it can run:
 - coverage thresholds
 - dependency security audits
 
-Quality gate failures use their own `quality_retry_count`; they do not consume the Evaluator retry budget. The Evaluator reads `.sprintfoundry/quality-gates/quality-gate-{N}.md` and uses it when scoring Craft. Legacy root-level `quality-gate-{N}.md` files may be read during migration, but new quality gate files belong under `.sprintfoundry/quality-gates/`.
+Quality gate failures use their own `quality_retry_count`; they do not consume the Evaluator retry budget. The Evaluator reads `.sprintfoundry/results/quality/quality-gate-{N}.md` and uses it when scoring Craft. Legacy root-level `quality-gate-{N}.md` files may be read during migration, but new quality gate files belong under `.sprintfoundry/results/quality/`.
 
 ## Versioning
 

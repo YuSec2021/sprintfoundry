@@ -29,7 +29,7 @@ explicitly asks you to revise the plan.
 
 For a new project, write all of the following:
 
-1. `.sprintfoundry/scope-classification.json`
+1. `.sprintfoundry/state/scope-classification.json`
 2. `planner-spec.json`
 3. `init.sh`
 4. `.sprintfoundry/claude-progress.txt` initial handoff entry

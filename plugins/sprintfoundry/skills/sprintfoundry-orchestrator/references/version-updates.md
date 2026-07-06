@@ -7,7 +7,7 @@ The Orchestrator decides the bump level — you never need to specify a version 
 
 Each sprint carries a `sprint_origin` label set at the moment the sprint is initiated.
 Together with explicit compatibility/release declarations in `sprint-contract.md`
-and `.sprintfoundry/eval-results/eval-result-N.md`, this
+and `.sprintfoundry/results/eval/eval-result-N.md`, this
 determines the semver bump applied immediately after `SPRINT PASS` is confirmed.
 
 ### Decision table
@@ -45,7 +45,7 @@ After every SPRINT PASS, the Orchestrator:
 2. Appends a changelog entry to `CHANGELOG.md` (created if absent)
 3. Commits both files: `chore(release): bump to vX.Y.Z after Sprint N PASS`
 4. Tags the commit: `git tag -a vX.Y.Z`
-5. Updates `.sprintfoundry/run-state.json current_version`
+5. Updates `.sprintfoundry/state/run-state.json current_version`
 
 `CHANGELOG.md` accumulates entries across the project lifetime — one entry per sprint PASS.
 
@@ -144,7 +144,7 @@ Stop after writing the file. Follow AGENTS.md Generator rules.
 - Evaluator test steps must reproduce the original failure before asserting the fix
 
 ### After SPRINT PASS
-Orchestrator deletes `sprint-contract.md`, `.sprintfoundry/sprint-fence.json`, `.sprintfoundry/eval-trigger.txt` as normal.
+Orchestrator deletes `sprint-contract.md`, `.sprintfoundry/state/sprint-fence.json`, `.sprintfoundry/signals/eval-trigger.txt` as normal.
 
 ---
 
@@ -206,7 +206,7 @@ Add new sprint entries for the requested major feature.
 Rules:
 - New sprint IDs must be higher than the highest existing sprint ID.
 - Do NOT renumber or remove any existing sprint entry.
-- Do NOT touch eval-result files or .sprintfoundry/run-state.json.
+- Do NOT touch eval-result files or .sprintfoundry/state/run-state.json.
 - Add features to the top-level "features" list if new capabilities are introduced.
 - Update design_language if the feature requires new UI patterns.
 Delete change-request.md after updating planner-spec.json.
@@ -256,7 +256,7 @@ This is the most disruptive update type. Proceed carefully.
 ```bash
 # 1. Confirm no sprint is currently in-flight
 ls sprint-contract.md 2>/dev/null && echo "WARNING: sprint in progress — complete it first"
-ls .sprintfoundry/eval-trigger.txt   2>/dev/null && echo "WARNING: pending eval — resolve it first"
+ls .sprintfoundry/signals/eval-trigger.txt   2>/dev/null && echo "WARNING: pending eval — resolve it first"
 
 # 2. Snapshot current state for audit trail
 python3 scripts/harness-log.py note --text "replan initiated — change-request: $(cat change-request.md | head -5)"
@@ -272,14 +272,14 @@ or explicitly abandon the current sprint first.
 Read planner-spec.json and change-request.md.
 Revise planner-spec.json for the new product direction.
 Rules:
-- Preserve all sprint entries that have a corresponding `.sprintfoundry/eval-results/eval-result-N.md`
+- Preserve all sprint entries that have a corresponding `.sprintfoundry/results/eval/eval-result-N.md`
   containing "SPRINT PASS" — set them to skipped: false (they are history, keep them).
 - For any sprint that has NOT been completed (no SPRINT PASS), you may:
   - Mark it "skipped": true if it is no longer needed, OR
   - Revise its title/features to align with the new direction.
 - New sprint IDs must be higher than the highest existing sprint ID — never reuse IDs.
 - Update product, design_language, tech_stack, and features as needed.
-- Do NOT delete eval-result files, .sprintfoundry/run-state.json, or .sprintfoundry/claude-progress.txt.
+- Do NOT delete eval-result files, .sprintfoundry/state/run-state.json, or .sprintfoundry/claude-progress.txt.
 Delete change-request.md after writing the updated spec.
 Append a note to .sprintfoundry/claude-progress.txt: "Replan completed — {one-line summary}".
 Stop after writing planner-spec.json.
@@ -294,13 +294,13 @@ New direction sprints                → IDs 6, 7, 8, … (always higher)
 ```
 
 Never renumber. The sprint history audit depends on stable IDs matching eval-result filenames.
-New eval-result files live in `.sprintfoundry/eval-results/`; legacy root files
+New eval-result files live in `.sprintfoundry/results/eval/`; legacy root files
 may be read during migration.
 
 ### After Planner completes
 
 1. Run sprint history audit (it will now see `skipped: true` sprints and ignore them).
-2. Update `.sprintfoundry/run-state.json`:
+2. Update `.sprintfoundry/state/run-state.json`:
    ```json
    {
      "mode": "planning",
@@ -396,7 +396,7 @@ import pathlib, re
 
 results = sorted(
     [
-        *pathlib.Path(".").glob(".sprintfoundry/eval-results/eval-result-*.md"),
+        *pathlib.Path(".").glob(".sprintfoundry/results/eval/eval-result-*.md"),
         *pathlib.Path(".").glob("eval-result-*.md"),
     ],
     key=lambda p: int(re.search(r"\d+", p.stem).group())
@@ -464,7 +464,7 @@ Does the new feature change the external surface of an already-PASS sprint?
        ├─ Is the old sprint's contract intentionally superseded?
        │    → Planner marks old sprint "skipped": true in planner-spec.json
        │      and documents the incompatibility in .sprintfoundry/claude-progress.txt.
-       │      Old .sprintfoundry/eval-results/eval-result-N.md is NEVER deleted — it remains as audit record.
+       │      Old .sprintfoundry/results/eval/eval-result-N.md is NEVER deleted — it remains as audit record.
        │
        └─ Is the old sprint's contract still valid but the implementation drifted?
             → Treat as architecture drift. Pause with needs_human=true.

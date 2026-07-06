@@ -22,7 +22,7 @@ FILES_JSON="$(git show --pretty='' --name-only HEAD 2>/dev/null | \
     2>/dev/null || echo '[]')"
 
 # Try to spot touches on files that should only change through the
-# harness (run-state.json, .sprintfoundry/eval-results/eval-result-*.md,
+# harness (run-state.json, .sprintfoundry/results/eval/eval-result-*.md,
 # sprint-contract.md) so
 # auditors can quickly find manual-override candidates.
 SENSITIVE_JSON="$(python3 - "$FILES_JSON" <<'PY' 2>/dev/null || echo '[]'
@@ -36,7 +36,9 @@ for f in files:
         sensitive.append(f)
     elif re.match(r"^eval-result-\d+\.md$", f):
         sensitive.append(f)
-    elif re.match(r"^\.sprintfoundry/eval-results/eval-result-\d+\.md$", f):
+    elif re.match(r"^\.sprintfoundry/(results/eval|eval-results)/eval-result-\d+\.md$", f):
+        sensitive.append(f)
+    elif re.match(r"^\.sprintfoundry/(state/)?(run-state|sprint-fence)\.json$", f):
         sensitive.append(f)
     elif f == "sprint-contract.md":
         sensitive.append(f)
@@ -62,6 +64,8 @@ record = {
         "sensitive_files": json.loads(sensitive_json),
     },
 }
-with pathlib.Path("harness-audit.ndjson").open("a", encoding="utf-8") as f:
+audit = pathlib.Path(".sprintfoundry/logs/harness-audit.ndjson")
+audit.parent.mkdir(parents=True, exist_ok=True)
+with audit.open("a", encoding="utf-8") as f:
     f.write(json.dumps(record, ensure_ascii=False) + "\n")
 PY
