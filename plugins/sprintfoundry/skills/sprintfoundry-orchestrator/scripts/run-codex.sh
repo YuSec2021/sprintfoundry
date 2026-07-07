@@ -55,8 +55,9 @@ mtime_of() {
 
 WRAPPER_PROMPT="Read the local SprintFoundry prompt file at ${PROMPT} and follow it exactly. The file content is the authoritative prompt for this Codex run."
 
-codex exec --sandbox workspace-write \
-  -c 'sandbox_permissions=["disk-full-read-access"]' \
+# Full-access mode: no sandbox, no approval prompts. Codex runs with the same
+# permissions as the invoking user. Mutually exclusive with --sandbox.
+codex exec --dangerously-bypass-approvals-and-sandbox \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
   "$WRAPPER_PROMPT" >>"$LOG" 2>&1 &

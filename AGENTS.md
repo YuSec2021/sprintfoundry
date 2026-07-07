@@ -90,7 +90,13 @@ Route strictly by current files:
 - `.sprintfoundry/signals/eval-trigger.txt` -> Evaluator CHECK unless a stale FAIL requires retry routing.
 - SPRINT PASS -> cleanup trigger, contract, and fence before the next sprint.
 
-Never start Sprint N if any prior planned sprint lacks `SPRINT PASS`.
+Progress is set-based and sprint IDs are stable identities. By default the next
+sprint is the lowest-ID non-skipped sprint without a `SPRINT PASS`, so a
+lower-ID sprint left unpassed after a higher-ID one passed is simply pending
+(routing resumes at it) — never buried and never renumbered. Out-of-order
+execution is supported: set `target_sprint` in `run-state.json` (or
+`.sprintfoundry/signals/target-sprint.txt`) to run a specific pending sprint
+next; the override self-clears once that sprint passes.
 
 ## Generator Startup Ritual
 

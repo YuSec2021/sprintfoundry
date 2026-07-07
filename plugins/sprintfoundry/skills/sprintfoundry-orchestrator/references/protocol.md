@@ -54,17 +54,26 @@ Its presence always means "sprint in progress."
 
 ---
 
-## Monotonic-PASS Invariant
+## Completion Signal (set-based progress)
 
 The **only** completion signal is `.sprintfoundry/results/eval/eval-result-{N}.md`
 containing the literal string `SPRINT PASS`.
 
 Everything else is derived state (.sprintfoundry/state/run-state.json, .sprintfoundry/claude-progress.txt, branch names).
 
-The Orchestrator re-derives which sprints passed from eval-result files on every
-invocation. It reads the hidden directory first and may read legacy root-level
-`eval-result-{N}.md` files during migration. It never trusts `.sprintfoundry/state/run-state.json`
-for advancement decisions.
+The Orchestrator re-derives the *set* of passed sprints from eval-result files on
+every invocation. It reads the hidden directory first and may read legacy
+root-level `eval-result-{N}.md` files during migration. It never trusts
+`.sprintfoundry/state/run-state.json` for advancement decisions.
+
+Sprint IDs are stable identities, independent of execution order. The default
+next sprint is the lowest-ID non-skipped sprint without a `SPRINT PASS`, so a
+lower-ID sprint left unpassed after a higher-ID one passed stays *pending* and
+is resumed later — it is never buried or renumbered. Out-of-order execution is
+supported via `target_sprint` (run-state.json) or
+`.sprintfoundry/signals/target-sprint.txt`. The one integrity rule that still
+pauses the harness: run-state must not claim a `last_successful_sprint` that no
+eval-result supports.
 
 ---
 
@@ -137,13 +146,12 @@ python3 scripts/harness-log.py note --text "reason for manual action"
 
 ---
 
-## Sprint History Audit — Historical Failure Modes Prevented
+## Sprint History Audit — Failure Modes Guarded Against
 
-| Failure mode | What used to happen | How the invariant blocks it |
-|--------------|---------------------|-----------------------------|
-| Bootstrap bypass | Codex writes Sprint 1 code + spec in one commit, skipping contract/eval-trigger | Audit fires: ".sprintfoundry/results/eval/eval-result-1.md is missing but Sprint ≥ 2 in progress" |
-| Manual FAIL override | `chore: sprint N complete` commit rewrites `.sprintfoundry/state/run-state.json` while eval-result still says SPRINT FAIL | Pre-commit hook rejects; orchestrator pauses on next routing call |
-| Non-contiguous PASS | Sprint K marked PASS while Sprint M < K has no eval-result | Audit flags `evaluator_skipped`/`fail_bypassed` for every gap |
+| Failure mode | What could happen | How the harness handles it |
+|--------------|-------------------|-----------------------------|
+| Manual FAIL/complete override | `chore: sprint N complete` commit rewrites `.sprintfoundry/state/run-state.json` to claim a `last_successful_sprint` no eval-result supports | Pre-commit hook rejects the advance-chore; orchestrator pauses (`run_state_unsupported`) on next routing call |
+| Lower sprint left unpassed | Sprint K passes while Sprint M < K has no eval-result | Not a violation — Sprint M is pending; routing resumes at it (lowest-first), keeping its ID. Nothing is buried or renumbered |
 | Silent manual override | Human edits .sprintfoundry/state/run-state.json with no audit trail | Post-commit hook records `commit_recorded` flagging .sprintfoundry/state/run-state.json as sensitive |
 
 ---

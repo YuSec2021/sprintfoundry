@@ -19,7 +19,7 @@ You are the **Orchestrator** of a three-agent GAN harness:
 | Role | Runtime | Who invokes |
 |------|---------|-------------|
 | **Planner** | Claude sub-agent | Orchestrator via `Agent(subagent_type="planner")` |
-| **Generator** | Codex CLI | Orchestrator via `Bash: codex exec --sandbox workspace-write …` |
+| **Generator** | Codex CLI | Orchestrator via `Bash: codex exec --dangerously-bypass-approvals-and-sandbox …` (through `run-codex.sh`) |
 | **Evaluator** | Claude sub-agent | Orchestrator via `Agent(subagent_type="evaluator")` |
 
 You are the only agent the user talks to directly.
@@ -316,11 +316,23 @@ The script is safe to run repeatedly. It acquires
 `.sprintfoundry/orchestrator.lock` (exit code 3 = another instance is running —
 stop and tell the user), migrates legacy file layouts, audits sprint history
 (fail-closed: verdict files without an explicit `SPRINT PASS` never count as
-passed; historical gaps are logged as informational findings and do not
-re-block routing), validates + executes pending commit requests (including the
-fence-sha contract-tamper check), archives consumed FAIL verdicts to
+passed; progress is set-based, so a lower-ID sprint left unpassed after a
+higher-ID one passed is simply *pending* and routing resumes at it — the only
+blocking audit finding is run-state claiming a `last_successful_sprint` that no
+eval-result supports), validates + executes pending commit requests (including
+the fence-sha contract-tamper check), archives consumed FAIL verdicts to
 `.sprintfoundry/archive/sprint-{N}/`, and writes attempt-numbered prompt files
 under `.sprintfoundry/prompts/sprint-{N}/`.
+
+**Sprint order & out-of-order execution.** Sprint IDs are stable identities;
+execution progress is the *set* of sprints whose eval-result contains
+`SPRINT PASS`. By default the script routes to the lowest-ID non-skipped
+unpassed sprint, so implementing a higher-ID sprint first never buries the
+lower ones — they stay pending and are picked up afterwards (no renumbering to
+`max+1`). To deliberately run a specific pending sprint out of order, set
+`target_sprint` in `run-state.json` or drop `sprint=N` into
+`.sprintfoundry/signals/target-sprint.txt`; the override is honoured only while
+that sprint is pending and self-clears once it passes.
 
 ### Act on the JSON decision
 
@@ -503,7 +515,7 @@ else:
 new_version = f"{major}.{minor}.{patch}"
 
 # Safety guard: new version must never be less than (or equal to) what VERSION already has.
-# This prevents rollback when re-processing a historical gap sprint.
+# This prevents rollback when re-processing an out-of-order / lower-ID sprint.
 def _v(s):
     try: return tuple(int(x) for x in s.split("."))
     except: return (0, 0, 0)
@@ -846,12 +858,14 @@ PY
   "current_version": "0.0.0",
   "sprint_origin": "feature | bugfix | minor_feature | major_feature | replan",
   "quality_retry_count": 0,
-  "merge_retry_count": 0
+  "merge_retry_count": 0,
+  "target_sprint": 0
 }
 ```
 
 `current_version` — semver string, updated by Orchestrator after every SPRINT PASS.  
-`sprint_origin` — written by `orchestrate.py` when a sprint is initiated (bugfix / change-request / planned feature); used to decide the version bump level.
+`sprint_origin` — written by `orchestrate.py` when a sprint is initiated (bugfix / change-request / planned feature); used to decide the version bump level.  
+`target_sprint` — optional out-of-order override: the ID of a pending sprint to run next, ahead of the default lowest-first order. Honoured only while pending; `orchestrate.py` clears it once that sprint passes. `0`/absent = no override (default order). Also settable via `.sprintfoundry/signals/target-sprint.txt` (`sprint=N`).
 
 Robustness:
 - All state writes are atomic (tmp + rename) — done by `orchestrate.py`.

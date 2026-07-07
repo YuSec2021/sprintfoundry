@@ -203,8 +203,8 @@ def test_codex_command_uses_modern_exec_when_version_is_new(monkeypatch) -> None
 
     monkeypatch.setattr(orchestrate, "codex_version_tuple", lambda: (0, 120, 0))
     command = orchestrate.codex_command(".sprintfoundry/prompts/sprint-1-implementation.md")
-    assert "codex exec --sandbox workspace-write" in command
-    assert "disk-full-read-access" in command
+    assert "codex exec --dangerously-bypass-approvals-and-sandbox" in command
+    assert "--sandbox" not in command
     assert "shell_environment_policy.inherit=all" in command
     assert "--skip-git-repo-check" in command
     assert ".sprintfoundry/prompts/sprint-1-implementation.md" in command
@@ -232,7 +232,7 @@ def test_codex_command_uses_prompt_file_not_inline_prompt(monkeypatch) -> None:
     monkeypatch.setattr(orchestrate, "codex_version_tuple", lambda: (0, 120, 0))
     command = orchestrate.codex_command(".sprintfoundry/prompts/sprint-1-retry.md")
     assert "Implement 'sprint' && rm -rf /" not in command
-    assert "codex exec --sandbox workspace-write" in command
+    assert "codex exec --dangerously-bypass-approvals-and-sandbox" in command
     assert "--skip-git-repo-check" in command
     assert "Read the local SprintFoundry prompt file" in command
 
@@ -690,18 +690,18 @@ def _write_multi_sprint_spec(path: Path, n: int) -> None:
     )
 
 
-def test_historical_gaps_are_informational_not_blocking(tmp_path: Path) -> None:
-    """Sprint 1/2 bootstrap-bypass replay: later sprints have PASS, Sprints 1+2
-    have no eval-result. run-state's claim (last=4) IS supported by
-    eval-result-4, so this is a historical gap: logged as informational
-    audit findings, routing continues (matches the skill semantics)."""
+def test_out_of_order_pass_leaves_lower_sprints_pending(tmp_path: Path) -> None:
+    """Set-based progress: Sprints 3+4 passed out of order while 1+2 are still
+    unpassed. Under the decoupled model 1+2 are NOT buried as historical gaps —
+    they stay pending and routing resumes at the lowest pending sprint (1),
+    with no blocking pause and no gap findings."""
     _write_multi_sprint_spec(tmp_path / "planner-spec.json", 4)
     (tmp_path / "eval-result-3.md").write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
     (tmp_path / "eval-result-4.md").write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
     write_json(
         tmp_path / RUN_STATE,
         {
-            "mode": "complete",
+            "mode": "contract",
             "current_sprint": 4,
             "retry_count": 0,
             "last_successful_sprint": 4,
@@ -716,17 +716,11 @@ def test_historical_gaps_are_informational_not_blocking(tmp_path: Path) -> None:
     result = run_orchestrator(tmp_path, "--json")
     payload = json.loads(result.stdout)
     assert result.returncode == 0
-    assert payload["rule"] == "all_sprints_complete"
+    assert payload["rule"] == "ready_for_next_sprint"
+    assert payload["current_sprint"] == 1
     records = _load_audit(tmp_path)
-    gap_kinds = {
-        (r["sprint"], r["payload"]["kind"])
-        for r in records if r["event"] == "audit_finding"
-    }
-    assert (1, "historical_gap_evaluator_skipped") in gap_kinds
-    assert (2, "historical_gap_evaluator_skipped") in gap_kinds
-    for r in records:
-        if r["event"] == "audit_finding":
-            assert r["payload"]["blocking"] is False
+    findings = [r for r in records if r["event"] == "audit_finding"]
+    assert findings == []  # no "historical gap" concept anymore
 
 
 def test_audit_blocks_when_run_state_claims_unsupported_pass(tmp_path: Path) -> None:
@@ -761,10 +755,10 @@ def test_audit_blocks_when_run_state_claims_unsupported_pass(tmp_path: Path) -> 
     assert "run_state_unsupported" in payload["rationale"]
 
 
-def test_fail_override_is_recorded_as_historical_gap(tmp_path: Path) -> None:
-    """Sprint 3 replay: eval-result-3.md says SPRINT FAIL while Sprint 4 has
-    PASS. The declared state (last=4) is supported, so the bypassed FAIL is a
-    historical gap: logged, surfaced, non-blocking."""
+def test_failed_lower_sprint_is_reexecuted(tmp_path: Path) -> None:
+    """eval-result-3 says SPRINT FAIL while 1, 2 and 4 passed. A FAIL is simply
+    "not passed", so Sprint 3 is pending and routing targets it (lowest pending)
+    for a fresh contract — the failure is never silently bypassed."""
     _write_multi_sprint_spec(tmp_path / "planner-spec.json", 4)
     for n in (1, 2):
         (tmp_path / f"eval-result-{n}.md").write_text(
@@ -779,7 +773,7 @@ def test_fail_override_is_recorded_as_historical_gap(tmp_path: Path) -> None:
     write_json(
         tmp_path / RUN_STATE,
         {
-            "mode": "complete",
+            "mode": "contract",
             "current_sprint": 4,
             "retry_count": 0,
             "last_successful_sprint": 4,
@@ -795,13 +789,10 @@ def test_fail_override_is_recorded_as_historical_gap(tmp_path: Path) -> None:
     result = run_orchestrator(tmp_path, "--json")
     payload = json.loads(result.stdout)
     assert result.returncode == 0
-    assert payload["rule"] == "all_sprints_complete"
+    assert payload["rule"] == "ready_for_next_sprint"
+    assert payload["current_sprint"] == 3
     records = _load_audit(tmp_path)
-    gap_kinds = {
-        (r["sprint"], r["payload"]["kind"])
-        for r in records if r["event"] == "audit_finding"
-    }
-    assert (3, "historical_gap_fail_bypassed") in gap_kinds
+    assert [r for r in records if r["event"] == "audit_finding"] == []
 
 
 def test_audit_passes_for_clean_history(tmp_path: Path) -> None:
@@ -863,16 +854,16 @@ def test_audit_log_emits_orchestrator_run_and_state_transition(tmp_path: Path) -
     assert run_record["payload"]["action"] == "invoke_codex_for_implementation"
 
 
-def test_audit_log_emits_audit_finding_on_inconsistent_state(tmp_path: Path) -> None:
-    """Every finding from audit_sprint_history must appear as its own event so
-    a human can see each violation individually instead of a blob rationale."""
+def test_audit_log_emits_blocking_finding_on_unsupported_pass(tmp_path: Path) -> None:
+    """The one remaining audit violation — run-state claiming a last_successful
+    sprint with no supporting SPRINT PASS — must surface as its own audit_finding
+    event (blocking=True) so a human sees the exact tampered claim."""
     _write_multi_sprint_spec(tmp_path / "planner-spec.json", 4)
-    (tmp_path / "eval-result-3.md").write_text(
-        "## Verdict: SPRINT FAIL\n", encoding="utf-8"
-    )
-    (tmp_path / "eval-result-4.md").write_text(
-        "## Verdict: SPRINT PASS\n", encoding="utf-8"
-    )
+    for n in (1, 2, 3):
+        (tmp_path / f"eval-result-{n}.md").write_text(
+            "## Verdict: SPRINT PASS\n", encoding="utf-8"
+        )
+    # run-state claims Sprint 4 passed, but there is no eval-result-4 at all.
     write_json(
         tmp_path / RUN_STATE,
         {
@@ -893,11 +884,9 @@ def test_audit_log_emits_audit_finding_on_inconsistent_state(tmp_path: Path) -> 
     records = _load_audit(tmp_path)
 
     findings = [r for r in records if r["event"] == "audit_finding"]
-    # Expect at least: missing sprint 1, missing sprint 2, fail_bypassed sprint 3
     kinds = {(r["sprint"], r["payload"]["kind"]) for r in findings}
-    assert (1, "historical_gap_evaluator_skipped") in kinds
-    assert (2, "historical_gap_evaluator_skipped") in kinds
-    assert (3, "historical_gap_fail_bypassed") in kinds
+    assert (4, "run_state_unsupported") in kinds
+    assert all(r["payload"]["blocking"] is True for r in findings)
 
 
 def test_audit_log_emits_eval_result_observed_snapshot(tmp_path: Path) -> None:
@@ -998,11 +987,10 @@ def test_harness_log_cli_verify_highlights_gap(tmp_path: Path) -> None:
     assert "gap" in result.stdout            # Sprints 1 & 2 missing
 
 
-def test_historical_gap_does_not_block_next_sprint(tmp_path: Path) -> None:
-    """Sprint 1 has no eval-result but Sprints 2 and 3 PASS and run-state's
-    claim (last=3) is supported. The gap is informational; routing proceeds
-    to Sprint 4 (the lowest pending sprint ABOVE the highest pass), and never
-    tries to re-execute the gap sprint."""
+def test_out_of_order_pass_resumes_at_lowest_pending(tmp_path: Path) -> None:
+    """Sprints 2 and 3 passed out of order while Sprint 1 is still unpassed.
+    Routing resumes at Sprint 1 (the lowest pending sprint), not at the sprint
+    after the highest pass — nothing below the high pass is buried."""
     _write_multi_sprint_spec(tmp_path / "planner-spec.json", 4)
     (tmp_path / "eval-result-2.md").write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
     (tmp_path / "eval-result-3.md").write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
@@ -1025,10 +1013,74 @@ def test_historical_gap_does_not_block_next_sprint(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert result.returncode == 0
     assert payload["rule"] == "ready_for_next_sprint"
-    assert payload["current_sprint"] == 4
+    assert payload["current_sprint"] == 1
     records = _load_audit(tmp_path)
-    gaps = [r for r in records if r["event"] == "audit_finding" and r["sprint"] == 1]
-    assert gaps and all(r["payload"]["blocking"] is False for r in gaps)
+    assert [r for r in records if r["event"] == "audit_finding"] == []
+
+
+def test_target_sprint_override_runs_out_of_order(tmp_path: Path) -> None:
+    """An explicit target_sprint jumps the queue: with nothing passed yet and
+    target_sprint=3, routing contracts Sprint 3 ahead of Sprints 1 and 2."""
+    _write_multi_sprint_spec(tmp_path / "planner-spec.json", 5)
+    write_json(
+        tmp_path / RUN_STATE,
+        {
+            "mode": "contract",
+            "current_sprint": 1,
+            "retry_count": 0,
+            "last_successful_sprint": 0,
+            "last_failure_reason": "",
+            "needs_human": False,
+            "active_branch": "main",
+            "base_branch": "main",
+            "last_run_at": "",
+            "target_sprint": 3,
+        },
+    )
+
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert payload["rule"] == "ready_for_next_sprint"
+    assert payload["current_sprint"] == 3
+
+
+def test_target_sprint_signal_file_is_honoured(tmp_path: Path) -> None:
+    """The signals/target-sprint.txt file is an alternative override channel."""
+    _write_multi_sprint_spec(tmp_path / "planner-spec.json", 5)
+    write_file(tmp_path / SIGNALS_DIR / "target-sprint.txt", "sprint=4\n")
+
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert payload["current_sprint"] == 4
+
+
+def test_target_sprint_ignored_once_passed(tmp_path: Path) -> None:
+    """Once the targeted sprint passes, the override self-deactivates and the
+    default lowest-first order resumes on the remaining sprints."""
+    _write_multi_sprint_spec(tmp_path / "planner-spec.json", 5)
+    (tmp_path / "eval-result-3.md").write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
+    write_json(
+        tmp_path / RUN_STATE,
+        {
+            "mode": "contract",
+            "current_sprint": 3,
+            "retry_count": 0,
+            "last_successful_sprint": 3,
+            "last_failure_reason": "",
+            "needs_human": False,
+            "active_branch": "main",
+            "base_branch": "main",
+            "last_run_at": "",
+            "target_sprint": 3,
+        },
+    )
+
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert payload["current_sprint"] == 1  # lowest remaining pending sprint
 
 
 # --- v2 hardening tests -------------------------------------------------------

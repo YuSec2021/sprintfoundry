@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 # Harness pre-commit gate.
 #
-# Enforces the monotonic-PASS invariant at Git layer:
-#   A commit that touches code inside a sprint boundary is only allowed if
-#   every strictly-earlier sprint in planner-spec.json has a
-#   .sprintfoundry/results/eval/eval-result-{N}.md containing "SPRINT PASS".
+# Progress is set-based and sprint IDs are stable identities, so out-of-order
+# execution (implementing a higher-ID sprint before a lower-ID one) is a
+# supported workflow — the router always resumes at the lowest pending sprint
+# and never buries lower IDs. The Git layer therefore does NOT block a
+# "feat(sprint-N)" commit merely because an earlier sprint has not passed yet.
 #
-# This blocks the two historical failure modes observed in this repo:
-#   1. A "feat(sprint-N): ..." commit landing before Evaluator ran Sprint N-1
-#      (Sprint 1/2 bootstrap bypass).
-#   2. A manual "chore: sprint N complete, advance" commit that rewrites
-#      run-state.json / claude-progress.txt while the eval-result file still
-#      contains SPRINT FAIL (Sprint 3 override).
+# What it still catches: a manual "chore: sprint N complete, advance" commit
+# that rewrites run-state.json to claim a last_successful_sprint no eval-result
+# supports (the run_state_unsupported / sprint_history_inconsistent case).
 #
 # Escape hatch: HARNESS_BYPASS=1 git commit ...  (use only for deliberate
 # rescue / replan commits that a human reviewed).
@@ -74,62 +72,9 @@ sys.exit(0 if d.get('rule') != 'sprint_history_inconsistent' else 1)
     rm -f /tmp/harness-audit.$$.json
 fi
 
-# --- Rule 2: reject feat/fix commits targeting sprint N+k when sprint N has
-#             no passing eval-result. Scans the commit subject for the
-#             sprint-N marker and blocks if any earlier sprint lacks PASS.
-SPRINT_IN_SUBJECT="$(
-  echo "$COMMIT_SUBJECT" | \
-    grep -oiE '\(sprint[[:space:]-]*[0-9]+\)|sprint[[:space:]-]+[0-9]+' | \
-    grep -oE '[0-9]+' | head -n 1 || true
-)"
-
-if [[ -n "$SPRINT_IN_SUBJECT" ]]; then
-    BLOCKED="$(python3 - "$SPRINT_IN_SUBJECT" <<'PY' || true
-import json, pathlib, sys
-
-target = int(sys.argv[1])
-
-spec_path = pathlib.Path("planner-spec.json")
-if not spec_path.exists():
-    sys.exit(0)
-spec = json.loads(spec_path.read_text())
-
-passed = set()
-paths = [
-    *pathlib.Path(".").glob(".sprintfoundry/results/eval/eval-result-*.md"),
-    *pathlib.Path(".").glob(".sprintfoundry/eval-results/eval-result-*.md"),  # legacy
-    *pathlib.Path(".").glob("eval-result-*.md"),  # legacy
-]
-for p in paths:
-    sid_str = p.stem.split("-")[-1]
-    if not sid_str.isdigit():
-        continue
-    if "SPRINT PASS" in p.read_text(encoding="utf-8", errors="ignore"):
-        passed.add(int(sid_str))
-
-missing = []
-for sprint in spec.get("sprints", []):
-    if sprint.get("skipped"):
-        continue
-    sid = int(sprint["id"])
-    if sid < target and sid not in passed:
-        missing.append(sid)
-
-if missing:
-    print(",".join(str(x) for x in missing))
-PY
-)"
-    if [[ -n "$BLOCKED" ]]; then
-        echo ""
-        echo "  ✗ blocked by harness-pre-commit (prior_sprint_not_passed)."
-        echo "    Commit subject targets Sprint $SPRINT_IN_SUBJECT, but the"
-        echo "    following earlier sprints have no SPRINT PASS eval-result: $BLOCKED"
-        echo "    Run the Evaluator for those sprints first."
-        echo "    Emergency bypass: HARNESS_BYPASS=1 git commit ..."
-        audit_log commit_blocked \
-          "$(python3 -c 'import json,sys; print(json.dumps({"rule": "prior_sprint_not_passed", "target_sprint": int(sys.argv[1]), "missing": [int(x) for x in sys.argv[2].split(",") if x], "subject": sys.argv[3]}))' "$SPRINT_IN_SUBJECT" "$BLOCKED" "$COMMIT_SUBJECT")"
-        exit 1
-    fi
-fi
+# Out-of-order sprint commits are intentionally NOT blocked: the router resumes
+# at the lowest pending sprint, so an earlier sprint without a PASS is simply
+# pending, not skipped. (The former "prior_sprint_not_passed" Rule 2 gate was
+# removed when progress became set-based.)
 
 exit 0

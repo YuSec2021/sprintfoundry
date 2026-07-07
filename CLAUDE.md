@@ -111,8 +111,9 @@ agent until a human explicitly clears it.
 ## Routing Order (implemented in orchestrate.py — do not re-implement)
 
 1. `needs_human=true` → pause.
-2. Sprint-history audit: blocking findings (run-state claims an unsupported
-   PASS) → pause; historical gaps → informational audit events only.
+2. Sprint-history audit (set-based): the only blocking finding is run-state
+   claiming a `last_successful_sprint` no eval-result supports → pause. Lower
+   IDs left unpassed after a higher ID passed are just pending, not violations.
 3. Missing `planner-spec.json` → Planner creates spec, `init.sh`, progress log.
 4. `contract-tampered.flag` → pause (advisory; the hard check is the fence sha).
 5. Commit request exists → Orchestrator validates (fence sha, branch, paths),
@@ -125,7 +126,9 @@ agent until a human explicitly clears it.
 9. `bug-report.md` → Codex proposes bugfix contract.
 10. `change-request.md` → route by `Type`.
 11. All planned sprints PASS → complete.
-12. Otherwise → Codex proposes the next sprint contract.
+12. Otherwise → Codex proposes the next sprint contract (default: lowest-ID
+    unpassed sprint; an explicit `target_sprint` / `signals/target-sprint.txt`
+    override runs a chosen pending sprint out of order, then self-clears).
 
 ## Verification Modes
 

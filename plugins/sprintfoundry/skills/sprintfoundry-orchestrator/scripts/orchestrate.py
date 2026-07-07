@@ -237,12 +237,11 @@ def codex_command(prompt_file: str, log_file: str | None = None,
     quoted_prompt = shlex.quote(wrapper_prompt)
     version = codex_version_tuple()
     if version is not None and version >= CODEX_EXEC_MODERN_MIN_VERSION:
-        # --sandbox workspace-write keeps writes restricted to the workspace.
-        # Codex writes project files only; Orchestrator owns Git metadata.
-        # shell_environment_policy.inherit=all keeps project-root/env hints available.
+        # Full-access mode: no sandbox, no approval prompts — Codex runs with the
+        # invoking user's permissions. shell_environment_policy.inherit=all keeps
+        # project-root/env hints available. (Mutually exclusive with --sandbox.)
         return (
-            "codex exec --sandbox workspace-write"
-            " -c 'sandbox_permissions=[\"disk-full-read-access\"]'"
+            "codex exec --dangerously-bypass-approvals-and-sandbox"
             " -c 'shell_environment_policy.inherit=all'"
             f" --skip-git-repo-check {quoted_prompt}"
         )
@@ -344,7 +343,7 @@ class SprintAuditFinding:
 
 
 def audit_sprint_history(project: "HarnessProject") -> tuple[list[SprintAuditFinding], list[SprintAuditFinding]]:
-    """Enforce the monotonic-PASS invariant.
+    """Integrity check for set-based progress.
 
     The only authoritative signal that Sprint N is complete is:
         eval-result-{N}.md exists AND contains "SPRINT PASS"
@@ -355,12 +354,11 @@ def audit_sprint_history(project: "HarnessProject") -> tuple[list[SprintAuditFin
       - run-state.json claims last_successful_sprint=N but no eval-result
         with SPRINT PASS supports it. This is active state tampering or loss.
 
-    Informational (surface, do not pause):
-      - Historical gaps: a sprint below max(passed) has no PASS. A later
-        sprint already passed, so someone deliberately advanced past it in the
-        past. Re-blocking forever on old history makes the harness unusable;
-        the gap is recorded in the audit log instead. This matches the skill's
-        documented semantics.
+    There is no "historical gap" concept: sprint IDs are stable identities and
+    progress is a set, so a lower-ID sprint left unpassed after a higher-ID one
+    passed is simply *pending* (the router picks it up lowest-first) rather than
+    a violation. Out-of-order execution is a supported workflow and never
+    buries planned work, so it produces no findings here.
     """
     if not project.spec_path.exists():
         return [], []
@@ -381,17 +379,13 @@ def audit_sprint_history(project: "HarnessProject") -> tuple[list[SprintAuditFin
         return [], []
 
     passed_ids: set[int] = set()
-    failed_ids: set[int] = set()
     for path in project.eval_results():
         sid = eval_sprint_id(path)
         if sid is None:
             continue
-        text = read_text(path)
-        # Fail-closed: a verdict file with neither marker counts as NOT passed.
-        if SPRINT_PASS in text:
+        # Fail-closed: a verdict file without SPRINT PASS counts as NOT passed.
+        if SPRINT_PASS in read_text(path):
             passed_ids.add(sid)
-        elif SPRINT_FAIL in text:
-            failed_ids.add(sid)
 
     if declared_last > 0 and declared_last not in passed_ids:
         blocking.append(
@@ -403,23 +397,6 @@ def audit_sprint_history(project: "HarnessProject") -> tuple[list[SprintAuditFin
                     f"but eval-result-{declared_last}.md is missing or does not "
                     f"contain SPRINT PASS"
                 ),
-            )
-        )
-
-    max_passed = max(passed_ids) if passed_ids else 0
-    for sid in planned_ids:
-        if sid in passed_ids or sid >= max_passed:
-            continue
-        kind = "historical_gap_fail_bypassed" if sid in failed_ids else "historical_gap_evaluator_skipped"
-        info.append(
-            SprintAuditFinding(
-                kind=kind,
-                sprint=sid,
-                detail=(
-                    f"no SPRINT PASS recorded but Sprint {max_passed} already "
-                    f"passed — historical gap, does not block routing"
-                ),
-                blocking=False,
             )
         )
 
@@ -492,6 +469,9 @@ class HarnessProject:
         # Orchestrator (not the Generator) owns contract-tamper detection.
         self.sprint_fence_path = self.state_dir / "sprint-fence.json"
         self.contract_tampered_path = self.state_dir / "contract-tampered.flag"
+        # Optional explicit out-of-order override: `sprint=N` selects a pending
+        # sprint to run next, ahead of the default lowest-first order.
+        self.target_sprint_path = self.signals_dir / "target-sprint.txt"
         self._migrate_legacy_runtime_files()
         self._ensure_harness_gitignore()
 
@@ -865,25 +845,49 @@ class HarnessProject:
         return passed
 
     def pending_sprints(self) -> list[int]:
-        """Planned sprints still to do: not passed AND above the highest pass.
+        """Planned sprints still to do: every non-skipped sprint without a
+        SPRINT PASS, in ascending ID order.
 
-        Sprints below max(passed) without a PASS are historical gaps — they
-        were deliberately advanced past and are surfaced by the audit as
-        informational findings, not re-executed.
+        Progress is *set-based*: a sprint is done iff its eval-result contains
+        SPRINT PASS. Sprint ID is a stable identity, independent of execution
+        order. A lower-ID sprint left unpassed after a higher-ID sprint passed
+        is NOT buried as a "historical gap" — it stays pending and is picked up
+        by the default lowest-first rule, so out-of-order execution never
+        renumbers or silently skips planned work.
         """
         spec = self.planner_spec()
         passed = self.passing_sprints()
-        max_passed = max(passed) if passed else 0
-        pending = []
-        for sprint in spec.get("sprints", []):
-            if sprint.get("skipped"):
-                continue
-            sprint_id = int(sprint["id"])
-            if sprint_id not in passed and sprint_id > max_passed:
-                pending.append(sprint_id)
+        pending = [
+            int(sprint["id"])
+            for sprint in spec.get("sprints", [])
+            if not sprint.get("skipped") and int(sprint["id"]) not in passed
+        ]
         return sorted(pending)
 
+    def target_sprint(self) -> int:
+        """Optional explicit override to run one pending sprint out of ID order.
+
+        Set `target_sprint` in run-state.json (or drop `sprint=N` into
+        {SIGNALS_DIR}/target-sprint.txt) to jump the queue. The override is
+        honoured only while that sprint is still pending; once it passes (or if
+        it is not a pending sprint) it is ignored, so the default lowest-first
+        rule transparently resumes on the remaining sprints. Returns 0 when no
+        valid override is active.
+        """
+        pending = set(self.pending_sprints())
+        raw = 0
+        if self.target_sprint_path.exists():
+            match = re.search(r"(\d+)", read_text(self.target_sprint_path))
+            if match:
+                raw = int(match.group(1))
+        if not raw:
+            raw = int(self.load_run_state().get("target_sprint", 0) or 0)
+        return raw if raw in pending else 0
+
     def current_sprint(self) -> int:
+        target = self.target_sprint()
+        if target:
+            return target
         pending = self.pending_sprints()
         return pending[0] if pending else 0
 
@@ -1637,6 +1641,18 @@ def maybe_cleanup_sprint_artifacts(project: HarnessProject, decision: RouteDecis
         stale = project.quality_gate_path(decision.current_sprint)
         if stale.exists():
             _archive_move(project, stale, decision.archive_quality_to)
+    # A consumed out-of-order override is cleared once its sprint passes so the
+    # default lowest-first order transparently resumes. target_sprint() already
+    # ignores a passed target, so this is housekeeping to avoid stale state.
+    if decision.last_successful:
+        if project.target_sprint_path.exists():
+            match = re.search(r"(\d+)", read_text(project.target_sprint_path))
+            if match and int(match.group(1)) == decision.last_successful:
+                project.target_sprint_path.unlink()
+        state = project.load_run_state()
+        if int(state.get("target_sprint", 0) or 0) == decision.last_successful:
+            state.pop("target_sprint", None)
+            project.save_run_state(state)
 
 
 def prepare_branch_for_decision(project: HarnessProject, decision: RouteDecision) -> RouteDecision:

@@ -329,7 +329,7 @@ initial entry in `.sprintfoundry/claude-progress.txt`.
 
 **Invoked by**: Orchestrator writes a prompt file under
 `.sprintfoundry/prompts/`, then calls Codex with a short wrapper command:
-`codex exec --sandbox workspace-write --skip-git-repo-check "Read the local SprintFoundry prompt file at ..."`
+`codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "Read the local SprintFoundry prompt file at ..."`
 
 **Output**: implemented code + updated `.sprintfoundry/claude-progress.txt` +
 `.sprintfoundry/signals/commit-requests/sprint-{N}.json`.
@@ -661,7 +661,7 @@ coding without a freshly approved contract.
 
 ---
 
-## Monotonic-PASS Invariant (authoritative completion signal)
+## Completion Signal & Set-Based Progress (authoritative)
 
 The **only** signal that Sprint N is complete is:
 
@@ -673,24 +673,34 @@ Everything else is derived state:
 - `.sprintfoundry/claude-progress.txt` — human-readable handoff, not truth.
 - branch name, commit log, `sprint-contract.md` deletion — all derived.
 
+Progress is **set-based**: the harness tracks the *set* of sprint IDs whose
+eval-result contains `SPRINT PASS`. Sprint IDs are stable identities that are
+independent of execution order — the harness does not require sprints to pass in
+ascending order.
+
 ### Consequences
 
 1. The Orchestrator re-derives "which sprints have passed" from
    `.sprintfoundry/results/eval/eval-result-{N}.md` files on every invocation; it never trusts
    `.sprintfoundry/state/run-state.json` for advancement decisions.
 2. The Orchestrator runs an audit (`audit_sprint_history` in
-   `scripts/orchestrate.py`) **before every routing rule**. If declared state
-   disagrees with the eval-result files — e.g. Sprint N marked advanced while
-   `.sprintfoundry/results/eval/eval-result-{N}.md` is missing or contains `SPRINT FAIL` — the
-   Orchestrator pauses with `needs_human=true` before any other rule can fire.
-3. The Orchestrator refuses to start Sprint N while any prior Sprint 1..N-1
-   lacks a `SPRINT PASS` eval-result, even if a human tries to edit
-   `.sprintfoundry/state/run-state.json` past the gap.
-4. A Git pre-commit hook (`.githooks/pre-commit`, installed by
-   `scripts/install-hooks.sh`) refuses commits that advance the sprint
-   counter while any earlier sprint lacks `SPRINT PASS`. The hook can only
-   be bypassed with `HARNESS_BYPASS=1 git commit ...` — intended for
-   explicit, human-reviewed rescue commits only.
+   `scripts/orchestrate.py`) **before every routing rule**. The one blocking
+   violation is run-state claiming a `last_successful_sprint` that no
+   eval-result with `SPRINT PASS` supports (active tampering or state loss) —
+   the Orchestrator pauses with `needs_human=true` before any other rule fires.
+3. The default next sprint is the lowest-ID non-skipped sprint without a
+   `SPRINT PASS`. A lower-ID sprint left unpassed after a higher-ID one passed
+   is **pending, not buried**: routing resumes at it and it keeps its ID (no
+   renumbering to `max+1`). To run a specific pending sprint out of order, set
+   `target_sprint` in `.sprintfoundry/state/run-state.json` or drop `sprint=N`
+   into `.sprintfoundry/signals/target-sprint.txt`; the override is honoured
+   only while that sprint is pending and self-clears once it passes.
+4. The Git pre-commit hook (`.githooks/pre-commit`, installed by
+   `scripts/install-hooks.sh`) does **not** block out-of-order sprint commits —
+   implementing a higher-ID sprint before a lower one is a supported workflow.
+   It still rejects a manual "advance sprint" chore commit whose run-state claim
+   is unsupported by eval-results. The hook can be bypassed with
+   `HARNESS_BYPASS=1 git commit ...` for explicit, human-reviewed rescue commits.
 
 ### Append-only audit trail (`.sprintfoundry/logs/harness-audit.ndjson`)
 
@@ -728,13 +738,12 @@ python3 scripts/harness-log.py verify               # reconcile state vs eval-re
 python3 scripts/harness-log.py note --text "reason" # annotate a manual action
 ```
 
-### Historical failure modes this invariant prevents
+### Failure modes this still guards against
 
-| Failure mode | What used to happen | How the invariant blocks it |
-|--------------|---------------------|-----------------------------|
-| **Bootstrap bypass** | Codex writes Sprint 1 code + `planner-spec.json` in one commit, skipping contract/eval-trigger; later sprints proceed. | Audit fires on next orchestrator run: ".sprintfoundry/results/eval/eval-result-1.md is missing but Sprint ≥ 2 is already in progress". |
-| **Manual FAIL override** | `chore: sprint N complete, advance to N+1` commit rewrites `.sprintfoundry/state/run-state.json` while `.sprintfoundry/results/eval/eval-result-N.md` still says SPRINT FAIL. | (a) pre-commit hook rejects the commit subject pattern when audit fails; (b) if bypassed, the orchestrator pauses on the very next routing call. |
-| **Non-contiguous PASS** | Sprint K marked PASS while some Sprint M \< K has no eval-result. | Audit flags `evaluator_skipped` / `fail_bypassed` for every gap. |
+| Failure mode | What could happen | How the harness handles it |
+|--------------|-------------------|-----------------------------|
+| **Manual FAIL/complete override** | `chore: sprint N complete` commit rewrites `.sprintfoundry/state/run-state.json` to claim a `last_successful_sprint` that no eval-result supports. | (a) pre-commit hook rejects the advance-chore subject when the audit reports `sprint_history_inconsistent`; (b) if bypassed, the orchestrator pauses (`run_state_unsupported`) on the very next routing call. |
+| **Lower sprint left unpassed** | Sprint K passes while some Sprint M \< K has no `SPRINT PASS`. | Not a violation — Sprint M is simply **pending**; routing resumes at it (lowest-first) and it keeps its ID. Nothing is buried or renumbered. |
 | **Silent manual override** | Human edits `.sprintfoundry/state/run-state.json` directly, no audit trail, root-cause takes hours to find. | `post-commit` hook writes a `commit_recorded` entry flagging `.sprintfoundry/state/run-state.json` as sensitive; `orchestrator_run` writes `state_transition` diffs on every invocation. |
 
 ---
@@ -766,7 +775,8 @@ Orchestrator calls Codex via Bash. Standard invocation patterns:
 mkdir -p .sprintfoundry/prompts
 
 # Write the full sprint-specific prompt to a local file first.
-cat > .sprintfoundry/prompts/sprint-N-implementation.md <<'EOF'
+mkdir -p .sprintfoundry/prompts/sprint-N
+cat > .sprintfoundry/prompts/sprint-N/attempt-1-invoke-codex-for-implementation.md <<'EOF'
 sprint-contract.md is approved. Implement Sprint N ONLY.
 Write .sprintfoundry/signals/commit-requests/sprint-N.json for Orchestrator commit.
 Do not run git commit or write .sprintfoundry/signals/eval-trigger.txt.
@@ -775,11 +785,10 @@ Follow AGENTS.md Generator rules.
 EOF
 
 # Then pass only the short file-reading wrapper to Codex.
-codex exec --sandbox workspace-write \
-  -c 'sandbox_permissions=["disk-full-read-access"]' \
+codex exec --dangerously-bypass-approvals-and-sandbox \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
-  "Read the local SprintFoundry prompt file at .sprintfoundry/prompts/sprint-N-implementation.md and follow it exactly. The file content is the authoritative prompt for this Codex run."
+  "Read the local SprintFoundry prompt file at .sprintfoundry/prompts/sprint-N/attempt-1-invoke-codex-for-implementation.md and follow it exactly. The file content is the authoritative prompt for this Codex run."
 ```
 
 ---
