@@ -183,8 +183,11 @@ Depending on the detected stack, it can run:
 - unit tests
 - coverage thresholds
 - dependency security audits
+- a stack-independent `test-presence` check that rejects application source changes without an added or updated test file
 
 Quality gate failures use their own `quality_retry_count`; they do not consume the Evaluator retry budget. The Evaluator reads `.sprintfoundry/results/quality/quality-gate-{N}.md` and uses it when scoring Craft. Legacy root-level `quality-gate-{N}.md` files may be read during migration, but new quality gate files belong under `.sprintfoundry/results/quality/`.
+
+Every contract success criterion must also include an `Automated test:` mapping with a concrete test file and command. During CHECK, the Evaluator runs each mapped command before functional verification and fails the sprint when a mapping is missing, its test file does not exist, or the command fails.
 
 ## Versioning
 

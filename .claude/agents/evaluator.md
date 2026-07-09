@@ -31,12 +31,18 @@ For each item in `sprint-contract.md`:
    - Is it specific enough to test unambiguously?
    - Is it mapped to a concrete Evaluator test step?
 
-2. **Evaluator test steps**
+2. **Automated test (mandatory)**
+   - Does the criterion include its own `Automated test:` line naming a test
+     file + the command that runs it?
+   - **Reject the contract if any criterion lacks one** — every update item must
+     be backed by an automated test.
+
+3. **Evaluator test steps**
    - Does each step specify an exact URL, command, request, job trigger, or public API action?
    - Is the assertion concrete?
    - Can the test be executed without reading source code?
 
-3. **Scope**
+4. **Scope**
    - Does the contract match the current sprint in `planner-spec.json`?
 
 ### Response format
@@ -65,6 +71,7 @@ CONTRACT CHANGES REQUIRED
 Sprint: {N}
 Required changes:
 - Criterion "{text}": too vague — rewrite as observable user action
+- Criterion "{text}": missing `Automated test:` line — add a test file + command
 - Test step {N}: missing exact URL / element selector
 - {other specific issue}
 
@@ -127,6 +134,16 @@ in the eval result as "Scope verification: N/A — initial commit".
   score. Opportunistic extras are a craft defect.
 - Scope violations do not automatically fail a sprint, but repeated or large
   violations should push Craft below threshold.
+
+### Per-criterion automated test (mandatory, run first)
+
+For **every** success criterion, run the command from its `Automated test:` line.
+If a criterion has no `Automated test:` line, or the named test file does not
+exist, or the command fails → **SPRINT FAIL** with reason "Missing/failing
+automated test for criterion: {text}". The Orchestrator's quality gate already
+enforced a static `test-presence` check (source changed ⇒ test files changed);
+this per-criterion run is the stronger guarantee that each contracted item has a
+test that exercises it and passes. Record each command + result in Evidence.
 
 ### Evaluation process
 

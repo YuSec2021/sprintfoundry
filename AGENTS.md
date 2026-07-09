@@ -142,6 +142,7 @@ Contract schema:
 
 ### Success criteria (black-box-verifiable)
 - [ ] <observable client/user behavior>
+  Automated test: <test file path> — `<command that runs just this test>`
   Evaluator steps:
   1. Start the system, e.g. `bash init.sh`
   2. Exercise the external surface for `planner-spec.json` verification.mode
@@ -152,12 +153,16 @@ Constraints:
 
 - At least one success criterion.
 - Every criterion has its own `Evaluator steps:` block.
+- **Every criterion has its own `Automated test:` line** naming a concrete test
+  file plus the command that runs it. Every update item must be backed by an
+  automated test — no exceptions.
 - Every criterion has at least two concrete test steps.
 - Total test steps across the contract is at least three.
 - URL/request steps must include full URLs.
 - Steps must be executable without source-code or internal inspection.
 
-After writing `sprint-contract.md`, stop. Evaluator approval is required.
+After writing `sprint-contract.md`, stop. Evaluator approval is required (it
+rejects any criterion missing an `Automated test:` mapping).
 
 ## Implementation Phase
 
@@ -174,7 +179,10 @@ Implementation rules:
 
 - Implement only Sprint N.
 - Follow the planner's tech stack and verification mode.
-- Write focused tests alongside implementation.
+- **Ship an automated test for every criterion / update item.** Any commit that
+  changes application source code must add or extend at least one test file, or
+  the quality gate's `test-presence` check fails the sprint. Each contract
+  criterion's `Automated test:` must exist and pass.
 - Never remove or weaken existing tests.
 - Never use inline styles in frontend components.
 - Prefer deleting weak code over wrapping it in new layers.
@@ -202,9 +210,17 @@ Prepare a commit request. Do not run `git add`, `git commit`, or write
   "attempt": "initial",
   "commit_message": "feat(sprint-<N>): <imperative description>",
   "changed_files": ["<relative paths>"],
-  "tests": [{"command": "uv run --python <project-python-version> --with pytest pytest -q", "status": "passed"}]
+  "tests": [
+    {"criterion": "<criterion text>", "test_file": "<path>",
+     "command": "uv run --python <project-python-version> --with pytest pytest -q <path>",
+     "status": "passed"}
+  ]
 }
 ```
+
+The `tests` array must map **every** contract criterion to the automated test
+that proves it (one entry per criterion). A commit request whose `changed_files`
+include source code but whose `tests` are empty is invalid.
 
 Write it to `.sprintfoundry/signals/commit-requests/sprint-<N>.json`, update
 `.sprintfoundry/claude-progress.txt` compactly, then stop. The Orchestrator
@@ -219,9 +235,10 @@ request that touches them (whether listed explicitly or swept in by an empty
 `.sprintfoundry/results/eval/eval-result-*.md` — verdicts belong to the
 Evaluator, and the Orchestrator attests each one in a store kept outside the
 project root; an unattested `SPRINT PASS` pauses the harness as suspected
-self-certification. You run under a workspace-write sandbox: writes outside
-the project and `/tmp` fail by design (package caches are redirected to
-`.sprintfoundry/cache/`), and `.git/` is read-only.
+self-certification. Codex runs in the workspace-write sandbox by default, and
+these boundaries are also enforced by the Orchestrator's commit-request
+validation. Still never run `git add`/`git commit`, never write `.git/`
+metadata or the eval trigger, and keep writes within the project.
 
 ## Retry Phase
 

@@ -33,6 +33,7 @@ Evaluator output belongs in `.sprintfoundry/results/eval/`.
 Schema constraints the Evaluator will enforce:
 - Every criterion must be **observable** through the configured verification mode (not an implementation detail)
 - Every criterion must include its own `Evaluator steps:` block
+- Every criterion must include its own `Automated test:` line (test file + command that runs it) — **every update item needs a test**
 - Every criterion needs **≥ 2 Evaluator test steps**
 - Every step requiring navigation/HTTP must include a full URL path
 - Contract needs **≥ 1** success criterion and **≥ 3** total test steps
@@ -48,7 +49,9 @@ self-check; on any mid-session contract change, stop and surface to the
 Orchestrator.
 
 - Read `planner-spec.json` for VDL and architecture constraints
-- Write tests alongside implementation — never after
+- Write tests alongside implementation — never after. **Every criterion / update
+  item ships its own automated test.** A source-code change with no accompanying
+  test file fails the quality gate's `test-presence` check.
 - No inline styles in React/frontend components
 - Do not carry forward abstractions unless required by current sprint
 - Check that implementation branch matches `.sprintfoundry/state/run-state.json active_branch`

@@ -182,8 +182,11 @@ Evaluator 做黑盒验证前，Orchestrator 会先运行 `references/quality-gat
 - 单元测试
 - 覆盖率阈值
 - 依赖安全审计
+- 与技术栈无关的 `test-presence` 检查：应用源码有改动但没有新增或更新测试文件时直接失败
 
 Quality Gate 失败使用独立的 `quality_retry_count`，不消耗 Evaluator 的 retry 预算。Evaluator 会读取 `.sprintfoundry/results/quality/quality-gate-{N}.md`，并将其纳入 Craft 评分。旧版根目录 `quality-gate-{N}.md` 仅迁移兼容读取，新文件统一写入 `.sprintfoundry/results/quality/`。
+
+每条 contract success criterion 还必须包含 `Automated test:` 映射，明确测试文件和执行命令。Evaluator 在功能验收前逐条执行这些命令；缺少映射、测试文件不存在或命令失败，都会直接判定该 sprint 失败。
 
 ## 版本策略
 

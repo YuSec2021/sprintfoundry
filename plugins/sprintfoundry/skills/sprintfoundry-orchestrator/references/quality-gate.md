@@ -5,6 +5,12 @@
 
 目标：把"代码内部质量"与"黑盒功能验证"分离，各自有独立的失败通道和修复循环。
 
+**硬性约束（对所有 sprint、每一项更新生效）**：除静态分析（lint/type/coverage/audit）
+和 Evaluator 的代码 review 之外，任何改动了应用源码的 sprint 都**必须**附带对应的
+自动化测试脚本。质量门禁内置的 **test-presence** 检查会对 sprint 的 diff 做静态判定：
+源码有改动但没有新增/修改任何测试文件 → 直接 FAIL。纯文档/配置/标记（md、json、
+yaml、html、css 等）改动豁免——它们没有可测的行为，且各自有独立的 lint 门禁。
+
 ---
 
 ## 目录
@@ -26,11 +32,11 @@
 ③ IMPLEMENT (Codex writes commit request; Orchestrator commits + writes .sprintfoundry/signals/eval-trigger.txt)
         │
         ▼
-   Rule 2.1: QUALITY GATE  ◀── 新增阶段
-        │
+   Rule 2.1: QUALITY GATE  ◀── lint / type / coverage / audit
+        │                       + test-presence（源码改动必须带测试）
    PASS ├──────────────────▶ ④ EVALUATE (Evaluator 黑盒验证)
         │
-   FAIL └──────────────────▶ Codex 修复质量问题
+   FAIL └──────────────────▶ Codex 修复质量问题（含补测试脚本）
                               quality_retry_count++
                               写新的 commit request
                               (不消耗 Evaluator retry_count)
@@ -196,6 +202,93 @@ if has_files(".js", ".mjs", ".cjs") and "eslint" not in results:
     )
     results["eslint-js"] = {"passed": rc == 0, "output": out}
 
+# ── Test-presence gate (MANDATORY for every sprint / every code change) ──────
+# Every sprint update must ship a corresponding automated test script — this is
+# a hard requirement on top of static analysis and the Evaluator's code review.
+# Compare the sprint's diff against its base: if application source code changed
+# but no test file was added or modified, FAIL. Pure docs / config / markup
+# changes are exempt (nothing behavioural to test; they have their own lint
+# gates). This runs for EVERY stack, including ones not otherwise recognised.
+def sprint_diff_files():
+    def sh(cmd):
+        code, out = run(cmd)
+        return out.strip() if code == 0 else ""
+
+    head = sh("git rev-parse HEAD 2>/dev/null")
+    base = ""
+    fence = pathlib.Path(".sprintfoundry/state/sprint-fence.json")
+    if fence.exists():
+        try:
+            base = json.loads(fence.read_text()).get("base_commit", "") or ""
+        except Exception:
+            base = ""
+    if not base:
+        base_branch = "main"
+        rs = pathlib.Path(".sprintfoundry/state/run-state.json")
+        if rs.exists():
+            try:
+                base_branch = json.loads(rs.read_text()).get("base_branch", "main") or "main"
+            except Exception:
+                base_branch = "main"
+        for cand in (base_branch, "main", "master"):
+            mb = sh(f"git merge-base HEAD {cand} 2>/dev/null")
+            # Ignore a base that resolves to HEAD itself (we are on/behind the
+            # base branch) — that would yield an empty diff and hide the change.
+            if mb and mb != head:
+                base = mb
+                break
+    if base and base != head:
+        _, out = run(f"git diff --name-only {base}..HEAD")
+    else:
+        parent = sh("git rev-parse --verify --quiet HEAD~1 2>/dev/null")
+        if parent:  # no distinct base recorded — compare against the parent commit
+            _, out = run("git diff --name-only HEAD~1..HEAD")
+        else:  # parentless root commit — --root lists its files as all-added
+            _, out = run("git diff-tree --root --no-commit-id --name-only -r HEAD")
+    return [f for f in out.splitlines() if f.strip()]
+
+def is_test_file(path):
+    name = path.lower().rsplit("/", 1)[-1]
+    if any(seg in f"/{path.lower()}" for seg in
+           ("/tests/", "/test/", "/__tests__/", "/spec/", "/e2e/", "/testing/")):
+        return True
+    return (
+        name.startswith("test_") or name.endswith("_test.py") or name.endswith("_test.go")
+        or ".test." in name or ".spec." in name
+        or name.endswith(("test.js", "spec.js", "test.ts", "spec.ts", "test.tsx", "spec.tsx"))
+    )
+
+CODE_EXTS = (
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go", ".rs", ".java",
+    ".rb", ".php", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".kt", ".swift",
+    ".scala", ".vue", ".svelte", ".dart",
+)
+changed_paths = [
+    f for f in sprint_diff_files()
+    if not any(part in SKIP_DIRS for part in pathlib.Path(f).parts)
+]
+code_changed = [
+    f for f in changed_paths
+    if pathlib.Path(f).suffix.lower() in CODE_EXTS and not is_test_file(f)
+]
+test_changed = [f for f in changed_paths if is_test_file(f)]
+if code_changed:
+    if test_changed:
+        results["test-presence"] = {
+            "passed": True,
+            "output": "Code changes ship tests:\n  " + "\n  ".join(test_changed[:20]),
+        }
+    else:
+        results["test-presence"] = {
+            "passed": False,
+            "output": (
+                "No test script accompanies the code changes. Every sprint update "
+                "must ship a corresponding automated test.\n"
+                "Add/extend tests for these changed source files:\n  "
+                + "\n  ".join(code_changed[:30])
+            ),
+        }
+
 # ── 兜底：如果未能识别任何栈，只跑 git diff stat ─────────────────────────────
 if not results:
     rc, out = run("git diff HEAD~1..HEAD --stat 2>&1")
@@ -291,6 +384,27 @@ uv run --python <version> --with pytest --with pytest-cov pytest --cov=. --cov-f
 若某栈既不属于上述 Python / JS-TS / 前端三类（例如 Go、Rust、Java），
 Orchestrator 记录 `.sprintfoundry/results/quality/quality-gate-N.md` 为"栈未识别，跳过静态分析"，
 **不因此失败**，但 Evaluator 须在 Craft 评分中注记"缺少静态分析覆盖"并适当扣分。
+注意：即使栈未识别，下面的 **test-presence** 门禁仍然生效。
+
+### test-presence（测试脚本存在性门禁，对所有 sprint 强制）
+
+| 项 | 说明 |
+|------|------|
+| 触发条件 | **每个 sprint 都跑**，与栈无关 |
+| 判定方式 | 静态比对 sprint 的 diff（fence 的 `base_commit` → 与 base 分支的 merge-base → 首提交回退 `git diff-tree HEAD`） |
+| 失败条件 | diff 改动了应用源码（`.py/.js/.ts/.jsx/.tsx/.go/.rs/.java/.vue/.svelte/...`）但**没有**新增或修改任何测试文件 |
+| 豁免 | 纯文档/配置/标记改动（md、json、yaml、toml、html、css、图片等）——无可测行为，另有各自 lint 门禁 |
+
+测试文件识别规则：路径含 `tests/`、`test/`、`__tests__/`、`spec/`、`e2e/`；或文件名匹配
+`test_*`、`*_test.py`、`*_test.go`、`*.test.*`、`*.spec.*`。
+
+失败时 Codex 走标准 `quality_retry` 循环补写测试脚本（不消耗 Evaluator 的 `retry_count`）。
+因为比对的是**整段 sprint diff**（base..HEAD），后续只修 lint 的 quality-retry 不会因此反复失败——
+只要该 sprint 累计已包含测试即通过。
+
+> test-presence 只保证"改动带测试文件"。**每一条 success criterion 是否都有对应测试**由
+> 契约 schema（Generator 写 `Automated test:`）和 Evaluator 的 CHECK 联合把关，见 AGENTS.md
+> 与 `references/evaluator-agent.md`。
 
 ---
 

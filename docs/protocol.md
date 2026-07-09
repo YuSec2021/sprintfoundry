@@ -379,6 +379,7 @@ these constraints during contract review and will reject a contract that violate
 
 ### Success criteria (black-box-verifiable)
 - [ ] <observable user-facing behavior — must be testable without reading source code>
+  Automated test: <test file path> — `<command that runs just this test>`
   Evaluator steps:
   1. Start the system, e.g. `bash init.sh`
   2. Exercise the external surface for the configured verification mode
@@ -390,6 +391,10 @@ these constraints during contract review and will reject a contract that violate
 - Every success criterion must be written as an observable client/user action or
   externally visible state, not an implementation detail (e.g. "POST /users returns
   201 with an id" ✓ — "UserService.create inserts a row" ✗).
+- Every success criterion must include its own `Automated test:` line (test file +
+  the command that runs it). Every update item must be backed by an automated
+  test; the quality gate's `test-presence` check also fails any code change that
+  ships no test file.
 - Every success criterion must include its own `Evaluator steps:` block directly beneath it.
 - Every success criterion must have **at least 2 Evaluator test steps** in that block.
 - Every test step that requires navigation or an HTTP request must include a full

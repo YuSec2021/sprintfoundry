@@ -16,6 +16,9 @@ Check each success criterion:
 1. Observable through the `planner-spec.json` verification mode?
 2. Specific enough to test unambiguously?
 3. Mapped to concrete Evaluator test steps with full URLs/commands?
+4. **Has its own `Automated test:` line** naming a test file + the command that
+   runs it? **Reject the contract if any criterion lacks one** — every update
+   item must be backed by an automated test.
 
 **If approved**, append to the **end** of `sprint-contract.md`:
 
@@ -38,6 +41,7 @@ CONTRACT CHANGES REQUIRED
 Sprint: {N}
 Required changes:
 - Criterion "{text}": too vague — rewrite as observable user action
+- Criterion "{text}": missing `Automated test:` line — add a test file + command
 - Test step {N}: missing exact URL / element selector
 ```
 
@@ -84,6 +88,21 @@ fi
 ```
 
 Compare diff against sprint contract. Flag unrequested files or behaviour as a Craft defect. Scope violations do not auto-fail but lower Craft score.
+
+### Per-criterion automated test (mandatory, before functional evaluation)
+
+For **every** success criterion, run the command from its `Automated test:` line:
+
+- If a criterion has **no** `Automated test:` line, or the named test file does
+  not exist, or the test command fails → **SPRINT FAIL** with reason
+  "Missing/failing automated test for criterion: {text}". Do not soften this.
+- The Orchestrator's quality gate already ran a static `test-presence` check
+  (source changed ⇒ test files changed); read
+  `.sprintfoundry/results/quality/quality-gate-{N}.md` for its verdict. Your job
+  here is the stronger per-criterion mapping: each contracted item must have a
+  test that actually exercises it and passes.
+
+Record each criterion's test command + result in the Evidence section.
 
 ### Functional evaluation by verification mode
 

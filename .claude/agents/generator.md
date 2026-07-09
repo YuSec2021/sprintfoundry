@@ -93,6 +93,7 @@ If `ACTION=implement`: skip to Step 3.
 
 ### Success criteria (black-box-verifiable)
 - [ ] <observable client/user behavior — testable without reading source code>
+  Automated test: <test file path> — `<command that runs just this test>`
   Evaluator steps:
   1. Start the system, e.g. `bash init.sh`
   2. Exercise the external surface for `planner-spec.json` verification.mode
@@ -104,6 +105,9 @@ If `ACTION=implement`: skip to Step 3.
 - Each success criterion must describe an observable client/user state, not an
   implementation detail.
 - Each success criterion must include its own `Evaluator steps:` block.
+- Each success criterion must include its own `Automated test:` line (test file +
+  the command that runs it). **Every update item must be backed by a test** —
+  the Evaluator rejects any criterion without one.
 - Each success criterion must have **≥ 2** mapped Evaluator test steps in that block.
 - Every navigation or HTTP request step must include a full URL path.
 - Every assertion step must be verifiable through the configured black-box surface without reading source code.
@@ -144,7 +148,9 @@ Implementation rules:
 
 - Read `planner-spec.json` for architecture constraints before writing code
 - Follow the Visual Design Language from the spec for all UI work
-- Write tests alongside implementation
+- Write tests alongside implementation — **one automated test per criterion /
+  update item**. A source-code change with no accompanying test file fails the
+  quality gate's `test-presence` check, so the sprint cannot pass.
 - Never use inline styles in React components
 - Prefer small coherent edits over layering more code on top of weak code
 - Delete temporary scaffolding, dead branches, and debug helpers before requesting commit
