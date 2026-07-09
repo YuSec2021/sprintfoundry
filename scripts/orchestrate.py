@@ -35,9 +35,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -80,6 +82,57 @@ ARCHIVE_DIR = f"{HARNESS_DIR}/archive"
 
 # Pre-v2 locations, still migrated/read.
 LEGACY_EVAL_RESULTS_DIR = f"{HARNESS_DIR}/eval-results"
+
+# ── eval-result provenance (attestation) ─────────────────────────────────────
+#
+# The Generator (Codex) can write project files even in the default workspace
+# sandbox, including an eval-result-{N}.md containing SPRINT PASS. Routing must
+# therefore not trust file *content* alone: a PASS only counts when the Orchestrator has
+# attested the verdict file right after the Evaluator produced it
+# (`orchestrate.py --attest-eval N`). Attestations pair the file's sha256 with
+# an HMAC, and BOTH the key and the attestation store live OUTSIDE the project
+# root (~/.sprintfoundry/): under Codex's workspace-write sandbox neither is
+# writable from inside the project, so a sandboxed Generator cannot mint or
+# replace attestations at all. Without the sandbox this remains defense-in-
+# depth (a full-access same-user process could still read the key), but it
+# closes the self-certification path and detects post-hoc verdict edits.
+#
+# Existing projects are grandfathered: the first read-write run after this
+# feature lands records every eval-result already on disk (trust on first
+# use), then enforcement applies to everything new. A store from the earlier
+# in-project location (.sprintfoundry/state/eval-attestations.json) is
+# migrated outside automatically.
+LEGACY_ATTEST_STORE = f"{STATE_DIR}/eval-attestations.json"
+ATTEST_KEY_ENV = "SPRINTFOUNDRY_ATTEST_KEY_FILE"
+ATTEST_DIR_ENV = "SPRINTFOUNDRY_ATTEST_DIR"
+DEFAULT_ATTEST_KEY = Path.home() / ".sprintfoundry" / "attest.key"
+DEFAULT_ATTEST_DIR = Path.home() / ".sprintfoundry" / "attest"
+
+# Paths the Generator must never change through a commit request: the hooks,
+# the harness scripts, and its own contract. A commit request touching any of
+# these is rejected (fail-closed) instead of silently unstaged.
+PROTECTED_PATH_PREFIXES = (".githooks/", ".git/")
+PROTECTED_PATH_FILES = (
+    "AGENTS.md",
+    "scripts/orchestrate.py",
+    "scripts/run-codex.sh",
+    "scripts/harness-log.py",
+    "scripts/check-agent-sync.sh",
+    "scripts/install-hooks.sh",
+)
+
+
+def is_protected_path(rel_path: str) -> bool:
+    normalized = rel_path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized in PROTECTED_PATH_FILES:
+        return True
+    return any(normalized.startswith(prefix) for prefix in PROTECTED_PATH_PREFIXES)
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
 
 
 def iso_now() -> str:
@@ -237,11 +290,19 @@ def codex_command(prompt_file: str, log_file: str | None = None,
     quoted_prompt = shlex.quote(wrapper_prompt)
     version = codex_version_tuple()
     if version is not None and version >= CODEX_EXEC_MODERN_MIN_VERSION:
-        # Full-access mode: no sandbox, no approval prompts — Codex runs with the
-        # invoking user's permissions. shell_environment_policy.inherit=all keeps
-        # project-root/env hints available. (Mutually exclusive with --sandbox.)
+        # Sandboxed by default: reads unrestricted, writes confined to the
+        # workspace (+ /tmp), .git/ read-only, approvals off so unattended
+        # runs never stall. SPRINTFOUNDRY_CODEX_SANDBOX=danger restores the
+        # old full-access mode; SPRINTFOUNDRY_CODEX_NETWORK=0 closes network.
+        # Mirrors run-codex.sh — keep the two in sync.
+        if os.environ.get("SPRINTFOUNDRY_CODEX_SANDBOX", "").lower() == "danger":
+            sandbox_args = "--dangerously-bypass-approvals-and-sandbox"
+        else:
+            sandbox_args = "--sandbox workspace-write --ask-for-approval never"
+            if os.environ.get("SPRINTFOUNDRY_CODEX_NETWORK", "1") != "0":
+                sandbox_args += " -c 'sandbox_workspace_write.network_access=true'"
         return (
-            "codex exec --dangerously-bypass-approvals-and-sandbox"
+            f"codex exec {sandbox_args}"
             " -c 'shell_environment_policy.inherit=all'"
             f" --skip-git-repo-check {quoted_prompt}"
         )
@@ -251,6 +312,68 @@ def codex_command(prompt_file: str, log_file: str | None = None,
 def parse_key(text: str, key: str) -> str | None:
     match = re.search(rf"^{re.escape(key)}\s*:\s*(.+)$", text, flags=re.IGNORECASE | re.MULTILINE)
     return match.group(1).strip() if match else None
+
+
+# ── anchored verdict parsing (fail-closed) ───────────────────────────────────
+#
+# Substring checks ("SPRINT PASS" in text) were fail-open: the unfilled
+# Evaluator template line "## Verdict: SPRINT PASS / SPRINT FAIL" contains
+# both tokens, and quoting prose ("criteria for SPRINT PASS not met") counted
+# as a pass. A verdict now only counts when it is a whole, dedicated line:
+# optional markdown decorations and an optional "Verdict:" label, then the
+# token, then nothing else containing letters or digits. The LAST verdict
+# line in the file wins. Anything ambiguous parses as UNKNOWN → fail-closed.
+
+_SPRINT_VERDICT_LINE = re.compile(
+    r"^[\s>#*_`-]*(?:verdict\s*[:：]\s*)?[*_`]*SPRINT\s+(PASS|FAIL)\b(?P<rest>.*)$",
+    re.IGNORECASE,
+)
+_QUALITY_VERDICT_LINE = re.compile(
+    r"^[\s>#*_`-]*verdict\s*[:：]\s*[*_`]*(PASS|FAIL)\b(?P<rest>.*)$",
+    re.IGNORECASE,
+)
+_CONTRACT_APPROVED_LINE = re.compile(
+    r"^[\s>#*_`-]*CONTRACT\s+APPROVED(?P<rest>.*)$",
+    re.IGNORECASE,
+)
+
+
+def _rest_is_decoration(rest: str) -> bool:
+    """True when nothing meaningful follows the verdict token on its line."""
+    return not re.search(r"[A-Za-z0-9]", rest)
+
+
+def parse_sprint_verdict(text: str) -> str:
+    """Return 'PASS', 'FAIL', or 'UNKNOWN' for an eval-result body."""
+    verdict = "UNKNOWN"
+    for line in text.splitlines():
+        match = _SPRINT_VERDICT_LINE.match(line)
+        if match and _rest_is_decoration(match.group("rest")):
+            verdict = match.group(1).upper()
+    return verdict
+
+
+def parse_quality_verdict(text: str) -> str:
+    """Return 'PASS', 'FAIL', or 'UNKNOWN' for a quality-gate report body."""
+    verdict = "UNKNOWN"
+    for line in text.splitlines():
+        match = _QUALITY_VERDICT_LINE.match(line)
+        if match and _rest_is_decoration(match.group("rest")):
+            verdict = match.group(1).upper()
+    return verdict
+
+
+def contract_is_approved(text: str) -> bool:
+    """CONTRACT APPROVED must be a dedicated line, not quoted prose.
+
+    The approval block appends metadata lines below the marker, so only the
+    marker line itself must be free of trailing content.
+    """
+    for line in text.splitlines():
+        match = _CONTRACT_APPROVED_LINE.match(line)
+        if match and _rest_is_decoration(match.group("rest")):
+            return True
+    return False
 
 
 def digest_verdict(text: str, limit: int = VERDICT_DIGEST_LIMIT) -> str:
@@ -383,9 +506,29 @@ def audit_sprint_history(project: "HarnessProject") -> tuple[list[SprintAuditFin
         sid = eval_sprint_id(path)
         if sid is None:
             continue
-        # Fail-closed: a verdict file without SPRINT PASS counts as NOT passed.
-        if SPRINT_PASS in read_text(path):
+        # Fail-closed: only an anchored SPRINT PASS verdict line counts, and
+        # the file must carry a valid Orchestrator attestation (or predate the
+        # attestation feature). An unattested/tampered PASS is the signature
+        # of Generator self-certification → blocking pause.
+        if parse_sprint_verdict(read_text(path)) != "PASS":
+            continue
+        status = project.eval_attestation_status(sid, path)
+        if status in {"trusted", "legacy"}:
             passed_ids.add(sid)
+        else:
+            blocking.append(
+                SprintAuditFinding(
+                    kind=f"eval_result_{status}",
+                    sprint=sid,
+                    detail=(
+                        f"{path.name} contains SPRINT PASS but its attestation is "
+                        f"{status} — the verdict was not produced (or was modified "
+                        "after) the sanctioned Evaluator flow. Possible Generator "
+                        "self-certification. If the verdict is legitimate, re-attest "
+                        f"with: orchestrate.py --attest-eval {sid}"
+                    ),
+                )
+            )
 
     if declared_last > 0 and declared_last not in passed_ids:
         blocking.append(
@@ -472,6 +615,17 @@ class HarnessProject:
         # Optional explicit out-of-order override: `sprint=N` selects a pending
         # sprint to run next, ahead of the default lowest-first order.
         self.target_sprint_path = self.signals_dir / "target-sprint.txt"
+        # Orchestrator-owned record of which eval-result files were produced
+        # through the sanctioned Evaluator flow. Lives OUTSIDE the project
+        # (keyed by a hash of the project root) so a workspace-sandboxed
+        # Generator cannot write it; the in-project path is legacy, migrated
+        # on the next read-write run.
+        self.legacy_attest_store_path = self.root / LEGACY_ATTEST_STORE
+        attest_dir = Path(
+            os.environ.get(ATTEST_DIR_ENV) or DEFAULT_ATTEST_DIR
+        ).expanduser()
+        project_hash = hashlib.sha256(str(self.root).encode("utf-8")).hexdigest()[:16]
+        self.attest_store_path = attest_dir / f"{project_hash}.json"
         self._migrate_legacy_runtime_files()
         self._ensure_harness_gitignore()
 
@@ -569,6 +723,181 @@ class HarnessProject:
             append_ndjson(self.audit_path, record)
         except OSError:
             pass
+
+    # ── eval-result attestation ───────────────────────────────────────────
+
+    def _attest_key_path(self) -> Path:
+        override = os.environ.get(ATTEST_KEY_ENV)
+        return Path(override).expanduser() if override else DEFAULT_ATTEST_KEY
+
+    def _attest_key(self, create: bool = False) -> bytes | None:
+        """Read (optionally create) the HMAC key stored outside the project."""
+        key_path = self._attest_key_path()
+        try:
+            if key_path.exists():
+                key = key_path.read_text(encoding="utf-8").strip()
+                return bytes.fromhex(key) if key else None
+            if not create:
+                return None
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            key = secrets.token_hex(32)
+            key_path.write_text(key + "\n", encoding="utf-8")
+            try:
+                os.chmod(key_path, 0o600)
+            except OSError:
+                pass
+            return bytes.fromhex(key)
+        except (OSError, ValueError):
+            return None
+
+    def _eval_mac(self, sprint: int, sha: str, create_key: bool = False) -> str | None:
+        key = self._attest_key(create=create_key)
+        if key is None:
+            return None
+        return hmac.new(key, f"eval:{sprint}:{sha}".encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def load_attestations(self) -> dict[str, Any] | None:
+        """None = store not initialised yet (feature inactive, legacy mode).
+
+        Reads the external store; falls back to the legacy in-project location
+        (pre-relocation) so --check-only reaches the same decision the next
+        read-write run will after migrating it outside.
+        """
+        source = None
+        if self.attest_store_path.exists():
+            source = self.attest_store_path
+        elif self.legacy_attest_store_path.exists():
+            source = self.legacy_attest_store_path
+        if source is None:
+            return None
+        try:
+            data = json.loads(read_text(source))
+        except json.JSONDecodeError:
+            return {}  # corrupt store: nothing is attested — fail-closed
+        return data if isinstance(data, dict) else {}
+
+    def _save_attestations(self, store: dict[str, Any]) -> None:
+        write_text(
+            self.attest_store_path,
+            json.dumps(store, ensure_ascii=False, indent=2) + "\n",
+        )
+        # The in-project copy is superseded once the external store exists.
+        if self.legacy_attest_store_path.exists():
+            try:
+                self.legacy_attest_store_path.unlink()
+            except OSError:
+                pass
+
+    def attest_eval(self, sprint: int) -> tuple[bool, str]:
+        """Record the current eval-result-{sprint}.md as Evaluator-produced.
+
+        Called by the Orchestrator skill immediately after the Evaluator
+        sub-agent returns — never for a file of unknown origin.
+        """
+        target: Path | None = None
+        for path in self.eval_results():
+            if eval_sprint_id(path) == sprint:
+                target = path
+        if target is None:
+            return False, f"no eval-result file found for sprint {sprint}"
+        sha = sha256_file(target)
+        mac = self._eval_mac(sprint, sha, create_key=True)
+        if mac is None:
+            return False, (
+                f"cannot read or create the attestation key "
+                f"({self._attest_key_path()}); refusing to attest"
+            )
+        store = self.load_attestations() or {"version": 1, "evals": {}}
+        store.setdefault("evals", {})[str(sprint)] = {
+            "sha256": sha,
+            "hmac": mac,
+            "verdict": parse_sprint_verdict(read_text(target)),
+            "file": str(target.relative_to(self.root)),
+            "attested_at": iso_now(),
+        }
+        self._save_attestations(store)
+        self.append_audit(
+            event="eval_result_attested",
+            actor="orchestrator",
+            sprint=sprint,
+            payload={"sha256": sha, "file": str(target.relative_to(self.root))},
+        )
+        return True, f"attested {target.name} (sha256={sha[:12]}…)"
+
+    def bootstrap_attestations(self) -> None:
+        """Trust-on-first-use migration: grandfather pre-existing eval-results.
+
+        Runs once, on the first read-write invocation after the attestation
+        feature lands. From then on the store exists and every new or changed
+        PASS verdict must be attested through the sanctioned flow.
+        """
+        if self.attest_store_path.exists():
+            return
+        # Relocate a legacy in-project store (earlier feature version) outside
+        # the project instead of re-grandfathering from scratch.
+        if self.legacy_attest_store_path.exists():
+            legacy = self.load_attestations() or {"version": 1, "evals": {}}
+            self._save_attestations(legacy)
+            self.append_audit(
+                event="attestations_relocated",
+                actor="orchestrator",
+                payload={"to": str(self.attest_store_path)},
+            )
+            return
+        store: dict[str, Any] = {"version": 1, "evals": {}}
+        grandfathered = []
+        for path in self.eval_results():
+            sid = eval_sprint_id(path)
+            if sid is None:
+                continue
+            sha = sha256_file(path)
+            mac = self._eval_mac(sid, sha, create_key=True)
+            if mac is None:
+                return  # key unavailable: stay in legacy mode rather than lock out
+            store["evals"][str(sid)] = {
+                "sha256": sha,
+                "hmac": mac,
+                "verdict": parse_sprint_verdict(read_text(path)),
+                "file": str(path.relative_to(self.root)),
+                "attested_at": iso_now(),
+                "grandfathered": True,
+            }
+            grandfathered.append(sid)
+        # Creating the key even for an empty store activates enforcement.
+        if self._attest_key(create=True) is None:
+            return
+        self._save_attestations(store)
+        self.append_audit(
+            event="attestations_bootstrapped",
+            actor="orchestrator",
+            payload={"grandfathered_sprints": grandfathered},
+        )
+
+    def eval_attestation_status(self, sprint: int, path: Path) -> str:
+        """'trusted' | 'unattested' | 'tampered' | 'legacy'.
+
+        'legacy' = store not initialised yet (pre-migration read-only run):
+        content is trusted so --check-only reaches the same decision the
+        subsequent read-write run will after grandfathering.
+        """
+        store = self.load_attestations()
+        if store is None:
+            return "legacy"
+        entry = (store.get("evals") or {}).get(str(sprint))
+        if not isinstance(entry, dict):
+            return "unattested"
+        actual_sha = sha256_file(path)
+        if entry.get("sha256") != actual_sha:
+            return "tampered"
+        expected_mac = self._eval_mac(sprint, actual_sha)
+        if expected_mac is None or not hmac.compare_digest(
+            str(entry.get("hmac") or ""), expected_mac
+        ):
+            return "tampered"
+        return "trusted"
+
+    def eval_pass_is_trusted(self, sprint: int, path: Path) -> bool:
+        return self.eval_attestation_status(sprint, path) in {"trusted", "legacy"}
 
     # ── git helpers ───────────────────────────────────────────────────────
 
@@ -840,7 +1169,11 @@ class HarnessProject:
         passed: set[int] = set()
         for path in self.eval_results():
             sprint_id = eval_sprint_id(path)
-            if sprint_id is not None and SPRINT_PASS in read_text(path):
+            if (
+                sprint_id is not None
+                and parse_sprint_verdict(read_text(path)) == "PASS"
+                and self.eval_pass_is_trusted(sprint_id, path)
+            ):
                 passed.add(sprint_id)
         return passed
 
@@ -900,7 +1233,7 @@ class HarnessProject:
             if eval_sprint_id(path) == sprint_id
         ]
         for path in reversed(candidates):
-            if SPRINT_FAIL in read_text(path):
+            if parse_sprint_verdict(read_text(path)) == "FAIL":
                 return path
         return None
 
@@ -970,6 +1303,11 @@ class HarnessProject:
             p = Path(str(raw))
             if p.is_absolute() or ".." in p.parts:
                 return False, f"unsafe changed_files path: {raw}"
+            if is_protected_path(str(raw)):
+                return False, (
+                    f"changed_files lists protected harness path {raw!r} — the "
+                    "Generator must never modify hooks, harness scripts, or AGENTS.md"
+                )
 
         if changed:
             result = self._git("add", "--", *[str(p) for p in changed])
@@ -984,6 +1322,21 @@ class HarnessProject:
             HARNESS_DIR, "eval-trigger.txt", "run-state.json",
             "sprint-fence.json", "sprint-contract.md.sha256",
         )
+
+        # Protected-path gate on what actually got staged (covers `git add -A`).
+        # Fail-closed: silently unstaging would hide a tamper attempt.
+        staged_names = self._git("diff", "--cached", "--name-only")
+        tampered = [
+            name for name in staged_names.stdout.splitlines()
+            if name and is_protected_path(name)
+        ]
+        if tampered:
+            self._git("reset", "-q", "--", *tampered)
+            return False, (
+                "commit request stages protected harness path(s): "
+                f"{', '.join(tampered[:10])} — hooks, harness scripts, and AGENTS.md "
+                "may only be changed by a human commit"
+            )
 
         staged = self._git("diff", "--cached", "--quiet")
         if staged.returncode == 0:
@@ -1035,8 +1388,7 @@ class HarnessProject:
         path = self.quality_gate_path(sprint)
         if not path.exists():
             return "MISSING"
-        match = re.search(r"Verdict:?\s*\**\s*(PASS|FAIL)", read_text(path))
-        return match.group(1) if match else "UNKNOWN"
+        return parse_quality_verdict(read_text(path))
 
     # ── observation ───────────────────────────────────────────────────────
 
@@ -1046,7 +1398,7 @@ class HarnessProject:
             "project_dir": str(self.root),
             "has_spec": self.spec_path.exists(),
             "has_contract": self.contract_path.exists(),
-            "contract_approved": CONTRACT_APPROVED in read_text(self.contract_path),
+            "contract_approved": contract_is_approved(read_text(self.contract_path)),
             "has_eval_trigger": self.eval_trigger_path.exists(),
             "has_run_state": self.run_state_path.exists(),
             "has_commit_request": bool(self.commit_requests()),
@@ -1195,8 +1547,12 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
                 ),
             )
 
+        # Anchored + attested: only an Orchestrator-attested PASS advances the
+        # sprint (untrusted PASS files already paused in the audit above).
         has_pass = any(
-            eval_sprint_id(path) == trigger_sprint and SPRINT_PASS in read_text(path)
+            eval_sprint_id(path) == trigger_sprint
+            and parse_sprint_verdict(read_text(path)) == "PASS"
+            and project.eval_pass_is_trusted(trigger_sprint, path)
             for path in project.eval_results()
         )
         failed_eval = project.latest_failed_eval(trigger_sprint)
@@ -1279,8 +1635,9 @@ def decide_route(project: HarnessProject, user_prompt: str, emit_audit: bool = T
                 prompt=(
                     f"Run the quality gate script (references/quality-gate.md) for "
                     f"Sprint {trigger_sprint}. It must write "
-                    f"{QUALITY_DIR}/quality-gate-{trigger_sprint}.md with a "
-                    "'Verdict: PASS/FAIL' line. Then re-run the orchestrator."
+                    f"{QUALITY_DIR}/quality-gate-{trigger_sprint}.md with a dedicated "
+                    "verdict line that is exactly 'Verdict: PASS' or 'Verdict: FAIL' "
+                    "(one of the two, nothing else on the line). Then re-run the orchestrator."
                 ),
             )
         if quality_verdict == "UNKNOWN":
@@ -1583,10 +1940,10 @@ def log_decision(project: HarnessProject, decision: RouteDecision) -> None:
         sid = eval_sprint_id(path)
         if sid is None:
             continue
-        text = read_text(path)
+        parsed = parse_sprint_verdict(read_text(path))
         verdict = (
-            SPRINT_PASS if SPRINT_PASS in text else
-            SPRINT_FAIL if SPRINT_FAIL in text else
+            SPRINT_PASS if parsed == "PASS" else
+            SPRINT_FAIL if parsed == "FAIL" else
             "UNKNOWN"
         )
         project.append_audit(
@@ -1721,6 +2078,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Compute the routing decision without writing logs, state, cleanup files, or switching branches.",
     )
     parser.add_argument("--json", action="store_true", help="Print decision as JSON.")
+    parser.add_argument(
+        "--attest-eval",
+        type=int,
+        metavar="SPRINT",
+        help=(
+            "Record eval-result-SPRINT.md as produced by the sanctioned Evaluator "
+            "flow. Run this immediately after the Evaluator sub-agent returns; a "
+            "PASS verdict without a valid attestation pauses the harness."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -1746,6 +2113,25 @@ def main(argv: list[str]) -> int:
         project._ensure_harness_gitignore()
 
     try:
+        if not args.check_only:
+            # Trust-on-first-use migration for pre-attestation projects, then
+            # normal enforcement. Must precede routing so a bootstrap and the
+            # decision see the same attestation state.
+            project.bootstrap_attestations()
+
+        if args.attest_eval is not None:
+            ok, message = project.attest_eval(args.attest_eval)
+            payload = {
+                "project_dir": str(project.root),
+                "action": "attest_eval",
+                "sprint": args.attest_eval,
+                "ok": ok,
+                "message": message,
+            }
+            print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json
+                  else f"attest_eval sprint={args.attest_eval}: {message}")
+            return 0 if ok else 1
+
         if not args.check_only:
             compress_progress(project.progress_path)
         decision = decide_route(project, args.user_prompt, emit_audit=not args.check_only)

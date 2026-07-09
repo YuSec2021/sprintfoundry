@@ -22,10 +22,29 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+# Anchored verdict parsing — mirrors orchestrate.py. Substring checks were
+# fail-open (the unfilled template line and quoting prose both contain the
+# tokens); only a dedicated verdict line counts, last one wins.
+_SPRINT_VERDICT_LINE = re.compile(
+    r"^[\s>#*_`-]*(?:verdict\s*[:：]\s*)?[*_`]*SPRINT\s+(PASS|FAIL)\b(?P<rest>.*)$",
+    re.IGNORECASE,
+)
+
+
+def parse_sprint_verdict(text: str) -> str:
+    verdict = "UNKNOWN"
+    for line in text.splitlines():
+        match = _SPRINT_VERDICT_LINE.match(line)
+        if match and not re.search(r"[A-Za-z0-9]", match.group("rest")):
+            verdict = match.group(1).upper()
+    return verdict
 
 
 AUDIT_FILE = ".sprintfoundry/logs/harness-audit.ndjson"
@@ -197,9 +216,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if not stem_tail.isdigit():
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
+        parsed = parse_sprint_verdict(text)
         verdict = (
-            "SPRINT PASS" if "SPRINT PASS" in text else
-            "SPRINT FAIL" if "SPRINT FAIL" in text else
+            "SPRINT PASS" if parsed == "PASS" else
+            "SPRINT FAIL" if parsed == "FAIL" else
             "UNKNOWN"
         )
         verdicts[int(stem_tail)] = verdict

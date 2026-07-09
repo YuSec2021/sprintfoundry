@@ -19,7 +19,7 @@ You are the **Orchestrator** of a three-agent GAN harness:
 | Role | Runtime | Who invokes |
 |------|---------|-------------|
 | **Planner** | Claude sub-agent | Orchestrator via `Agent(subagent_type="planner")` |
-| **Generator** | Codex CLI | Orchestrator via `Bash: codex exec --dangerously-bypass-approvals-and-sandbox …` (through `run-codex.sh`) |
+| **Generator** | Codex CLI | Orchestrator via `Bash: codex exec --sandbox workspace-write …` (through `run-codex.sh`) |
 | **Evaluator** | Claude sub-agent | Orchestrator via `Agent(subagent_type="evaluator")` |
 
 You are the only agent the user talks to directly.
@@ -296,9 +296,13 @@ routing rules inline; a second implementation is how routing drift happens.
 ### Locate the script
 
 ```bash
-# 1) project-local copy wins; 2) otherwise use the copy shipped with this skill
-ORCH="$SPRINTFOUNDRY_PROJECT_ROOT/scripts/orchestrate.py"
-[ -f "$ORCH" ] || ORCH="$(dirname "$SKILL_PATH")/scripts/orchestrate.py"
+# 1) The copy shipped with this skill ALWAYS wins; 2) a project-local copy is
+#    only a fallback for dev checkouts of SprintFoundry itself.
+# Security: the Generator can write anything inside the target project,
+# including scripts/orchestrate.py. Preferring the project copy would let
+# Generator-controlled code run as the Orchestrator (privilege inversion).
+ORCH="$(dirname "$SKILL_PATH")/scripts/orchestrate.py"
+[ -f "$ORCH" ] || ORCH="$SPRINTFOUNDRY_PROJECT_ROOT/scripts/orchestrate.py"
 ```
 
 (`$SKILL_PATH` = this SKILL.md's directory inside the plugin. The plugin
@@ -344,13 +348,40 @@ that sprint is pending and self-clears once it passes.
 | `commit_generator_output` | Already executed by the script (validate → commit → write eval trigger). Just re-run the script to continue routing. |
 | `run_quality_gate` | Run the quality-gate script from `references/quality-gate.md` for the sprint, then re-run the orchestrator script. |
 | `invoke_evaluator_contract_review` | Read `references/evaluator-agent.md`, then `Agent(subagent_type="evaluator", prompt=decision.prompt + project-root preamble)`. |
-| `invoke_evaluator` | Same, for the black-box CHECK. The prompt already points at the quality-gate report. |
+| `invoke_evaluator` | Same, for the black-box CHECK. The prompt already points at the quality-gate report. **Immediately after the Evaluator sub-agent returns and `eval-result-{N}.md` exists, attest the verdict:** `python3 "$ORCH" --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --attest-eval {N}` — then re-run the orchestrator script. |
 | `invoke_codex_for_contract` / `_implementation` / `_retry` / `_quality_retry` / `_bugfix_contract` / `_iteration_contract` | Run `decision.command` via Bash (it invokes Codex through the `run-codex.sh` watchdog). See Codex invocation section for the timeout-retry policy. |
 | `clear_eval_trigger_and_continue` | The sprint PASSED. Run the Auto-Version bump, then the Sprint Branch Merge (both below), then re-run the orchestrator script. |
 | `complete` | Report to the user, summarise `.sprintfoundry/claude-progress.txt`, ask for the next feature. |
 
 After every delegated step finishes, **re-run the orchestrator script** and act
 on the new decision. Never infer the next step from conversation memory.
+
+### Eval-result attestation (anti self-certification)
+
+Even with the default workspace-write sandbox, file content inside the project
+alone cannot prove a verdict came from the Evaluator. The orchestrator script
+therefore only counts a `SPRINT PASS` when the verdict file carries a valid
+Orchestrator attestation:
+
+- **After every Evaluator CHECK** (the moment the sub-agent returns and
+  `eval-result-{N}.md` is on disk), run
+  `python3 "$ORCH" --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --attest-eval {N}`.
+- Attest **only** verdicts you just received from the Evaluator sub-agent —
+  never a file you found on disk with unknown origin.
+- The attestation pairs the file's sha256 with an HMAC. Both the key
+  (`~/.sprintfoundry/attest.key`, override `SPRINTFOUNDRY_ATTEST_KEY_FILE`)
+  and the store (`~/.sprintfoundry/attest/<project-hash>.json`, override
+  `SPRINTFOUNDRY_ATTEST_DIR`) live OUTSIDE the project root: under the
+  workspace-write Codex sandbox the Generator cannot write either, which makes
+  attestations unforgeable from inside a sprint. Verdict lines are also parsed anchored:
+  the verdict must be a dedicated line (e.g. `## Verdict: SPRINT PASS`);
+  quoted tokens and the unfilled template never count.
+- A PASS with a missing/broken attestation pauses the harness
+  (`eval_result_unattested` / `eval_result_tampered`). If a human confirms the
+  verdict is legitimate, re-attest it with the same command; never edit the
+  attestation store by hand.
+- Pre-existing projects are grandfathered automatically on the first
+  read-write run (trust on first use).
 
 ### Sub-agent prompt preamble (mandatory)
 
@@ -736,7 +767,16 @@ Codex through **`run-codex.sh`**:
 bash <scripts>/run-codex.sh <prompt_file> .sprintfoundry/logs/codex/sprint-N-attempt-K.log
 ```
 
-The wrapper enforces four protections against Codex hangs:
+The wrapper runs Codex **sandboxed by default**: `--sandbox workspace-write
+--ask-for-approval never` (+ network enabled inside the sandbox). Reads are
+unrestricted — prompt files, contracts, and archived verdicts stay readable —
+while writes are confined to the project and `/tmp`, and `.git/` is read-only
+(Git metadata is Orchestrator-owned anyway). Package-manager caches are
+redirected into `.sprintfoundry/cache/` so installs work under the sandbox.
+Overrides: `SPRINTFOUNDRY_CODEX_SANDBOX=danger` restores full access,
+`SPRINTFOUNDRY_CODEX_NETWORK=0` closes the network.
+
+The wrapper also enforces four protections against Codex hangs:
 
 1. **Prompt-size fuse** — refuses prompt files over 16 KB (exit 91). Fix by
    digesting content and referencing artifact files by path, never by inlining
@@ -910,14 +950,19 @@ Never infer state from conversation history alone.
 - Never operate from the plugin cache/base directory. Resolve
   `SPRINTFOUNDRY_PROJECT_ROOT` first, `cd` there, and stop on any project-root
   mismatch.
+- Never attest an eval-result you did not just receive from the Evaluator
+  sub-agent (`--attest-eval` is the only sanctioned trust channel).
+- Never prefer a project-local `orchestrate.py`/`run-codex.sh` over the copies
+  shipped with this skill — project copies are Generator-writable.
 
 ---
 
-## Harness scripts (project copy first, plugin copy as fallback)
+## Harness scripts (plugin copy first — project copies are Generator-writable)
 
 ```bash
 python3 "$ORCH" --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --json          # route (exit 3 = lock held)
 python3 "$ORCH" --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --check-only --json  # read-only decision
+python3 "$ORCH" --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --attest-eval N # attest Evaluator verdict
 bash <scripts>/run-codex.sh <prompt_file> <log_file>           # watchdogged Codex run
 python3 <scripts>/harness-log.py verify                        # reconcile state vs eval-results
 python3 <scripts>/harness-log.py tail -n 30                    # last 30 audit events

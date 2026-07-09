@@ -24,6 +24,13 @@
 # Orchestrator policy on 124/125: retry the SAME prompt once (most stalls are
 # transient network/service issues), then pause with needs_human=true and
 # attach the log tail to last_failure_reason.
+#
+# Sandbox (env overrides):
+#   SPRINTFOUNDRY_CODEX_SANDBOX   workspace-write (default) | danger
+#                                 "danger" restores --dangerously-bypass-…
+#                                 for projects that truly need full access.
+#   SPRINTFOUNDRY_CODEX_NETWORK   1 (default) | 0 — network inside the
+#                                 workspace-write sandbox (installs need it).
 # ─────────────────────────────────────────────────────────────────────────────
 set -u
 
@@ -32,6 +39,8 @@ LOG="${2:?usage: run-codex.sh <prompt_file> <log_file> [hard_timeout_s] [idle_ti
 HARD_TIMEOUT="${3:-3600}"
 IDLE_TIMEOUT="${4:-300}"
 PROMPT_SIZE_LIMIT_BYTES="${SPRINTFOUNDRY_PROMPT_LIMIT:-16384}"
+SANDBOX_MODE="${SPRINTFOUNDRY_CODEX_SANDBOX:-workspace-write}"
+NETWORK_ACCESS="${SPRINTFOUNDRY_CODEX_NETWORK:-1}"
 
 # ── Prompt-size fuse ─────────────────────────────────────────────────────────
 if [[ ! -f "$PROMPT" ]]; then
@@ -55,9 +64,33 @@ mtime_of() {
 
 WRAPPER_PROMPT="Read the local SprintFoundry prompt file at ${PROMPT} and follow it exactly. The file content is the authoritative prompt for this Codex run."
 
-# Full-access mode: no sandbox, no approval prompts. Codex runs with the same
-# permissions as the invoking user. Mutually exclusive with --sandbox.
-codex exec --dangerously-bypass-approvals-and-sandbox \
+# ── Package-manager caches inside the workspace ──────────────────────────────
+# workspace-write blocks writes to ~/.npm, ~/.cache etc.; point every common
+# cache at .sprintfoundry/cache (gitignored, persists across attempts) so
+# installs neither fail nor re-download each retry.
+CACHE_ROOT="$PWD/.sprintfoundry/cache"
+mkdir -p "$CACHE_ROOT" 2>/dev/null || true
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$CACHE_ROOT/xdg}"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$CACHE_ROOT/pip}"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$CACHE_ROOT/uv}"
+export npm_config_cache="${npm_config_cache:-$CACHE_ROOT/npm}"
+
+# ── Sandboxed invocation ─────────────────────────────────────────────────────
+# Default: --sandbox workspace-write — reads are unrestricted (prompt files,
+# contracts, archived verdicts all readable), writes are confined to the
+# project + /tmp, and .git/ stays read-only (Git metadata is Orchestrator-
+# owned anyway). Approval policy "never": blocked commands fail fast instead
+# of stalling an unattended run; the watchdog below still bounds total time.
+if [[ "$SANDBOX_MODE" == "danger" ]]; then
+    CODEX_ARGS=(--dangerously-bypass-approvals-and-sandbox)
+else
+    CODEX_ARGS=(--sandbox workspace-write --ask-for-approval never)
+    if [[ "$NETWORK_ACCESS" != "0" ]]; then
+        CODEX_ARGS+=(-c 'sandbox_workspace_write.network_access=true')
+    fi
+fi
+
+codex exec "${CODEX_ARGS[@]}" \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
   "$WRAPPER_PROMPT" >>"$LOG" 2>&1 &

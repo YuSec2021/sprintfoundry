@@ -208,7 +208,7 @@ Date: {ISO timestamp}
 | Craft           | {X}/10 | ≥ 7      | PASS/FAIL |
 | Functionality   | {X}/10 | ≥ 8      | PASS/FAIL |
 
-## Verdict: SPRINT PASS / SPRINT FAIL
+## Verdict: {exactly one of: SPRINT PASS | SPRINT FAIL}
 
 ## Evidence
 
@@ -222,6 +222,13 @@ Observation: {what you observed through the configured verification surface}
 1. {concrete, actionable fix}
 2. {concrete, actionable fix}
 ```
+
+**Verdict line format is machine-parsed and strict.** The verdict line must be
+a dedicated line reading exactly `## Verdict: SPRINT PASS` or
+`## Verdict: SPRINT FAIL` — one token, nothing else on the line. The
+Orchestrator parses verdicts line-anchored and fail-closed: a line containing
+both tokens (an unfilled template), or prose mentioning `SPRINT PASS`, parses
+as UNKNOWN and stalls the sprint.
 
 ### Calibration rules
 

@@ -329,7 +329,8 @@ initial entry in `.sprintfoundry/claude-progress.txt`.
 
 **Invoked by**: Orchestrator writes a prompt file under
 `.sprintfoundry/prompts/`, then calls Codex with a short wrapper command:
-`codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "Read the local SprintFoundry prompt file at ..."`
+`codex exec --sandbox workspace-write --ask-for-approval never --skip-git-repo-check "Read the local SprintFoundry prompt file at ..."`
+(sandboxed by default; `SPRINTFOUNDRY_CODEX_SANDBOX=danger` restores full access)
 
 **Output**: implemented code + updated `.sprintfoundry/claude-progress.txt` +
 `.sprintfoundry/signals/commit-requests/sprint-{N}.json`.
@@ -665,7 +666,16 @@ coding without a freshly approved contract.
 
 The **only** signal that Sprint N is complete is:
 
-> `.sprintfoundry/results/eval/eval-result-{N}.md` exists AND contains the literal string `SPRINT PASS`.
+> `.sprintfoundry/results/eval/eval-result-{N}.md` exists, contains a dedicated
+> `SPRINT PASS` verdict line, and matches an Orchestrator attestation stored
+> outside the project under `~/.sprintfoundry/attest/`.
+
+Verdict parsing is line-anchored and fail-closed: quoted prose and the unfilled
+`SPRINT PASS / SPRINT FAIL` template are not verdicts. The Orchestrator attests
+each result immediately after Evaluator CHECK; an unattested or subsequently
+modified PASS pauses the harness. Codex runs in a workspace-write sandbox by
+default, and commit requests touching harness hooks, core scripts, or
+`AGENTS.md` are rejected.
 
 Everything else is derived state:
 
@@ -785,7 +795,8 @@ Follow AGENTS.md Generator rules.
 EOF
 
 # Then pass only the short file-reading wrapper to Codex.
-codex exec --dangerously-bypass-approvals-and-sandbox \
+codex exec --sandbox workspace-write --ask-for-approval never \
+  -c 'sandbox_workspace_write.network_access=true' \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
   "Read the local SprintFoundry prompt file at .sprintfoundry/prompts/sprint-N/attempt-1-invoke-codex-for-implementation.md and follow it exactly. The file content is the authoritative prompt for this Codex run."

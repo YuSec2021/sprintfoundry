@@ -72,7 +72,8 @@ Important boundaries:
 - Codex does not evaluate its own output or write Git metadata.
 - `.sprintfoundry/signals/eval-trigger.txt` is written only after the Orchestrator has committed the sprint.
 - Progress advances through file artifacts, not chat memory.
-- A sprint is complete only when `.sprintfoundry/results/eval/eval-result-{N}.md` contains `SPRINT PASS`.
+- Codex runs in a workspace-write sandbox by default; package caches stay under `.sprintfoundry/cache/`.
+- A sprint is complete only when its eval result has a dedicated `SPRINT PASS` verdict line and a valid Orchestrator attestation.
 
 ## Main Flow
 
@@ -156,7 +157,7 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 | `.sprintfoundry/signals/eval-trigger.txt` | Orchestrator | Signal that a committed sprint is ready for quality gate and evaluation |
 | `.sprintfoundry/signals/target-sprint.txt` | User + Orchestrator | Optional `sprint=N` override to run one pending sprint out of order |
 | `.sprintfoundry/results/quality/quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK |
-| `.sprintfoundry/results/eval/eval-result-{N}.md` | Evaluator | Sprint verdict and evidence; only `SPRINT PASS` completes a sprint |
+| `.sprintfoundry/results/eval/eval-result-{N}.md` | Evaluator | Sprint verdict and evidence; only an anchored, Orchestrator-attested `SPRINT PASS` completes a sprint |
 | `.sprintfoundry/state/run-state.json` | Orchestrator | Current mode, retry counters, active branch, pause state, version metadata, and optional `target_sprint` override |
 | `.sprintfoundry/claude-progress.txt` | Generator + Orchestrator | Compact rolling handoff, not a transcript |
 | `change-request.md` | User + Orchestrator | Classified iteration request: bugfix, minor feature, major feature, or replan |
@@ -165,9 +166,11 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 
 Runtime state lives under `.sprintfoundry/`. Legacy root-level `run-state.json`, `eval-trigger.txt`, `sprint-fence.json`, `eval-result-*.md`, and `quality-gate-*.md` may be migrated or read for compatibility, but new machine artifacts should not be written to the project root.
 
-Sprint progress is set-based: a sprint is complete only when its eval result contains `SPRINT PASS`. The default router selects the lowest-ID non-skipped sprint without a PASS, so a lower-ID sprint left unpassed after a higher-ID sprint passes remains pending instead of being buried or renumbered. To deliberately run a specific pending sprint out of order, set `target_sprint` in `.sprintfoundry/state/run-state.json` or write `sprint=N` to `.sprintfoundry/signals/target-sprint.txt`; the override is ignored once that sprint is no longer pending.
+Sprint progress is set-based: a sprint is complete only when its eval result has a dedicated `SPRINT PASS` verdict line and the file matches an Orchestrator attestation stored outside the project under `~/.sprintfoundry/attest/`. Quoted verdict text, an unfilled `SPRINT PASS / SPRINT FAIL` template, and modified or unattested PASS files do not advance progress. The default router selects the lowest-ID non-skipped sprint without a PASS, so a lower-ID sprint left unpassed after a higher-ID sprint passes remains pending instead of being buried or renumbered. To deliberately run a specific pending sprint out of order, set `target_sprint` in `.sprintfoundry/state/run-state.json` or write `sprint=N` to `.sprintfoundry/signals/target-sprint.txt`; the override is ignored once that sprint is no longer pending.
 
 Codex handoffs are file-backed: before invoking Codex, the Orchestrator writes the complete sprint-specific instructions to `.sprintfoundry/prompts/` and passes only a short "read this local prompt file" wrapper on the command line. Retry prompts also embed the Evaluator failure details in this file before stale eval-result files are removed, so retries do not depend on deleted state.
+
+Codex runs with `--sandbox workspace-write --ask-for-approval never` by default, with network access enabled and common package caches redirected into `.sprintfoundry/cache/`. Set `SPRINTFOUNDRY_CODEX_NETWORK=0` to disable sandbox network access or `SPRINTFOUNDRY_CODEX_SANDBOX=danger` only for projects that explicitly require full host access. Commit requests that touch the harness hooks, core scripts, or `AGENTS.md` are rejected so the Generator cannot rewrite its own guardrails.
 
 ## Quality Gate
 

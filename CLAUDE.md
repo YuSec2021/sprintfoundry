@@ -69,7 +69,13 @@ automatically by `orchestrate.py`.
 Generator is always Codex CLI. Never invoke a Claude `generator` sub-agent.
 Never call `codex exec` directly — always through `run-codex.sh` (hard timeout,
 idle heartbeat, prompt-size fuse, log capture; on exit 124/125 retry once, then
-pause with `needs_human=true`).
+pause with `needs_human=true`). Codex runs sandboxed by default
+(`--sandbox workspace-write --ask-for-approval never`, network on, caches
+redirected to `.sprintfoundry/cache/`); `SPRINTFOUNDRY_CODEX_SANDBOX=danger`
+restores full access, `SPRINTFOUNDRY_CODEX_NETWORK=0` closes network.
+Eval-result attestations live outside the project
+(`~/.sprintfoundry/attest/<project-hash>.json`), so a sandboxed Generator
+cannot forge them.
 
 The Orchestrator is the **plugin skill** — not an agent. It resolves the
 project root, then delegates every routing decision to `orchestrate.py` and
@@ -168,6 +174,17 @@ paths. The wrapper refuses prompt files above 16 KB (exit 91).
 - No code before `CONTRACT APPROVED`.
 - No sprint advancement without `SPRINT PASS`.
 - A verdict file without an explicit `SPRINT PASS` never counts as passed (fail-closed).
+- Verdict parsing is line-anchored: `SPRINT PASS` / `Verdict: PASS` /
+  `CONTRACT APPROVED` only count as a dedicated line; quoted tokens and the
+  unfilled template parse as UNKNOWN.
+- A `SPRINT PASS` only counts when Orchestrator-attested
+  (`orchestrate.py --attest-eval N`, run right after the Evaluator returns);
+  unattested or modified PASS files pause the harness.
+- Commit requests touching protected paths (`.githooks/`, harness `scripts/`,
+  `AGENTS.md`) are rejected — the Generator never edits its own guardrails.
+- The skill runs the plugin-shipped `orchestrate.py`/`run-codex.sh`; a
+  project-local copy is only a dev fallback (project copies are
+  Generator-writable).
 - Do not clear `needs_human=true` automatically.
 - Do not rewrite `.sprintfoundry/logs/harness-audit.ndjson`; consumed verdicts
   are archived under `.sprintfoundry/archive/`, never deleted.

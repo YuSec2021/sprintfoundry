@@ -202,12 +202,33 @@ def test_codex_command_uses_modern_exec_when_version_is_new(monkeypatch) -> None
     from scripts import orchestrate
 
     monkeypatch.setattr(orchestrate, "codex_version_tuple", lambda: (0, 120, 0))
+    monkeypatch.delenv("SPRINTFOUNDRY_CODEX_SANDBOX", raising=False)
+    monkeypatch.delenv("SPRINTFOUNDRY_CODEX_NETWORK", raising=False)
     command = orchestrate.codex_command(".sprintfoundry/prompts/sprint-1-implementation.md")
-    assert "codex exec --dangerously-bypass-approvals-and-sandbox" in command
-    assert "--sandbox" not in command
+    # Sandboxed by default — never full access unless explicitly requested.
+    assert "codex exec --sandbox workspace-write --ask-for-approval never" in command
+    assert "--dangerously-bypass-approvals-and-sandbox" not in command
+    assert "sandbox_workspace_write.network_access=true" in command
     assert "shell_environment_policy.inherit=all" in command
     assert "--skip-git-repo-check" in command
     assert ".sprintfoundry/prompts/sprint-1-implementation.md" in command
+
+
+def test_codex_command_sandbox_env_overrides(monkeypatch) -> None:
+    from scripts import orchestrate
+
+    monkeypatch.setattr(orchestrate, "codex_version_tuple", lambda: (0, 120, 0))
+    # Explicit opt-out restores the old full-access mode.
+    monkeypatch.setenv("SPRINTFOUNDRY_CODEX_SANDBOX", "danger")
+    command = orchestrate.codex_command(".sprintfoundry/prompts/p.md")
+    assert "--dangerously-bypass-approvals-and-sandbox" in command
+    assert "--sandbox workspace-write" not in command
+    # Network can be closed while staying sandboxed.
+    monkeypatch.setenv("SPRINTFOUNDRY_CODEX_SANDBOX", "workspace-write")
+    monkeypatch.setenv("SPRINTFOUNDRY_CODEX_NETWORK", "0")
+    command = orchestrate.codex_command(".sprintfoundry/prompts/p.md")
+    assert "--sandbox workspace-write" in command
+    assert "network_access" not in command
 
 
 def test_codex_command_uses_legacy_exec_when_version_is_old(monkeypatch) -> None:
@@ -230,9 +251,10 @@ def test_codex_command_uses_prompt_file_not_inline_prompt(monkeypatch) -> None:
     from scripts import orchestrate
 
     monkeypatch.setattr(orchestrate, "codex_version_tuple", lambda: (0, 120, 0))
+    monkeypatch.delenv("SPRINTFOUNDRY_CODEX_SANDBOX", raising=False)
     command = orchestrate.codex_command(".sprintfoundry/prompts/sprint-1-retry.md")
     assert "Implement 'sprint' && rm -rf /" not in command
-    assert "codex exec --dangerously-bypass-approvals-and-sandbox" in command
+    assert "codex exec --sandbox workspace-write" in command
     assert "--skip-git-repo-check" in command
     assert "Read the local SprintFoundry prompt file" in command
 
@@ -1307,3 +1329,252 @@ def test_command_uses_watchdog_wrapper_when_available(tmp_path: Path) -> None:
     assert payload["prompt_file"] in command
     assert payload["log_file"] in command
     assert payload["log_file"].startswith(".sprintfoundry/logs/codex/")
+
+
+# --- anchored verdict parsing (fail-closed) ------------------------------------
+
+
+def test_parse_sprint_verdict_is_line_anchored() -> None:
+    from scripts.orchestrate import parse_sprint_verdict
+
+    # Dedicated verdict lines count.
+    assert parse_sprint_verdict("## Verdict: SPRINT PASS\n") == "PASS"
+    assert parse_sprint_verdict("**SPRINT FAIL**\n") == "FAIL"
+    assert parse_sprint_verdict("SPRINT PASS\n") == "PASS"
+    # The unfilled template line contains both tokens — ambiguous, UNKNOWN.
+    assert parse_sprint_verdict("## Verdict: SPRINT PASS / SPRINT FAIL\n") == "UNKNOWN"
+    # Quoting prose never counts.
+    assert parse_sprint_verdict("criteria for SPRINT PASS not met\n") == "UNKNOWN"
+    assert parse_sprint_verdict("the goal is SPRINT PASS on retry\n") == "UNKNOWN"
+    assert parse_sprint_verdict("SPRINT PASS requires all criteria\n") == "UNKNOWN"
+    # The LAST dedicated verdict line wins.
+    assert parse_sprint_verdict(
+        "## Verdict: SPRINT FAIL\n\n(re-check)\n\n## Verdict: SPRINT PASS\n"
+    ) == "PASS"
+    assert parse_sprint_verdict("") == "UNKNOWN"
+
+
+def test_unfilled_verdict_template_does_not_advance_sprint(tmp_path: Path) -> None:
+    """An eval-result containing only the template header (both tokens) must
+    parse as UNKNOWN: neither a pass (no advance) nor a fail (no retry)."""
+    write_spec(tmp_path / "planner-spec.json")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
+    write_eval_result(tmp_path, 1, "## Verdict: SPRINT PASS / SPRINT FAIL\n")
+
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert payload["rule"] not in {"eval_trigger_has_pass", "eval_trigger_with_fail"}
+    assert payload["rule"] == "quality_gate_missing"
+
+
+def test_quality_gate_template_verdict_is_fail_closed(tmp_path: Path) -> None:
+    """A quality-gate report with the unfilled 'Verdict: PASS/FAIL' template
+    line must pause fail-closed, not parse as PASS."""
+    write_spec(tmp_path / "planner-spec.json")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
+    write_file(tmp_path / QUALITY_DIR / "quality-gate-1.md", "Verdict: PASS/FAIL\n")
+
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 2
+    assert payload["rule"] == "quality_gate_unreadable"
+
+
+def test_contract_approval_requires_dedicated_line(tmp_path: Path) -> None:
+    """Quoting 'CONTRACT APPROVED' in prose must not count as approval."""
+    write_spec(tmp_path / "planner-spec.json")
+    (tmp_path / "sprint-contract.md").write_text(
+        "## Sprint 1\nThe Evaluator will write CONTRACT APPROVED when satisfied.\n",
+        encoding="utf-8",
+    )
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "invoke_evaluator_contract_review"
+
+
+# --- eval-result attestation (anti self-certification) -------------------------
+
+
+def test_unattested_pass_pauses_as_self_certification(tmp_path: Path) -> None:
+    """Once the attestation store exists, a PASS verdict that appeared without
+    the sanctioned --attest-eval step must pause the harness."""
+    write_spec(tmp_path / "planner-spec.json")
+    # First run initialises the (empty) attestation store.
+    first = run_orchestrator(tmp_path, "--json")
+    assert json.loads(first.stdout)["action"] == "invoke_codex_for_contract"
+
+    # A PASS verdict materialises without any Evaluator/attestation step —
+    # exactly what a self-certifying Generator would produce.
+    write_eval_result(tmp_path, 1, "## Verdict: SPRINT PASS\n")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
+
+    second = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(second.stdout)
+    assert second.returncode == 2
+    assert payload["rule"] == "sprint_history_inconsistent"
+    assert "unattested" in payload["rationale"]
+
+
+def test_attested_pass_advances_normally(tmp_path: Path) -> None:
+    """The sanctioned flow: Evaluator writes the verdict, the Orchestrator
+    attests it, and only then does routing treat the sprint as passed."""
+    write_spec(tmp_path / "planner-spec.json")
+    first = run_orchestrator(tmp_path, "--json")
+    assert json.loads(first.stdout)["action"] == "invoke_codex_for_contract"
+
+    write_eval_result(tmp_path, 1, "## Verdict: SPRINT PASS\n")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
+
+    attest = run_orchestrator(tmp_path, "--attest-eval", "1", "--json")
+    assert attest.returncode == 0, attest.stdout + attest.stderr
+    assert json.loads(attest.stdout)["ok"] is True
+
+    second = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(second.stdout)
+    assert payload["rule"] == "eval_trigger_has_pass"
+
+
+def test_pass_modified_after_attestation_pauses_as_tampered(tmp_path: Path) -> None:
+    """Editing an attested verdict file breaks its sha — routing must pause."""
+    write_spec(tmp_path / "planner-spec.json")
+    run_orchestrator(tmp_path, "--json")
+
+    eval_path = write_eval_result(tmp_path, 1, "## Verdict: SPRINT FAIL\n")
+    assert run_orchestrator(tmp_path, "--attest-eval", "1", "--json").returncode == 0
+    # Post-hoc rewrite of the attested verdict (FAIL → PASS).
+    eval_path.write_text("## Verdict: SPRINT PASS\n", encoding="utf-8")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
+
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 2
+    assert payload["rule"] == "sprint_history_inconsistent"
+    assert "tampered" in payload["rationale"]
+
+
+def _external_attest_store(project_dir: Path) -> Path:
+    """The store lives OUTSIDE the project: <attest_dir>/<hash(root)>.json."""
+    import hashlib
+    import os
+
+    attest_dir = Path(os.environ["SPRINTFOUNDRY_ATTEST_DIR"])
+    project_hash = hashlib.sha256(
+        str(project_dir.resolve()).encode("utf-8")
+    ).hexdigest()[:16]
+    return attest_dir / f"{project_hash}.json"
+
+
+def test_preexisting_evals_are_grandfathered_on_first_run(tmp_path: Path) -> None:
+    """Projects created before the attestation feature must keep working:
+    the first read-write run trusts what is already on disk (TOFU)."""
+    write_spec(tmp_path / "planner-spec.json")
+    write_eval_result(tmp_path, 1, "## Verdict: SPRINT PASS\n")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
+
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert payload["rule"] == "eval_trigger_has_pass"
+    store = json.loads(_external_attest_store(tmp_path).read_text(encoding="utf-8"))
+    assert store["evals"]["1"]["grandfathered"] is True
+    # The store must NOT live inside the (Generator-writable) project tree.
+    assert not (tmp_path / STATE_DIR / "eval-attestations.json").exists()
+
+
+def test_check_only_does_not_initialise_attestation_store(tmp_path: Path) -> None:
+    write_spec(tmp_path / "planner-spec.json")
+    result = run_orchestrator(tmp_path, "--check-only", "--json")
+    assert result.returncode == 0
+    assert not _external_attest_store(tmp_path).exists()
+    assert not (tmp_path / STATE_DIR / "eval-attestations.json").exists()
+
+
+def test_legacy_in_project_attest_store_is_relocated_outside(tmp_path: Path) -> None:
+    """A store written by the earlier feature version (inside .sprintfoundry/)
+    must be moved outside the project on the next read-write run, keeping its
+    entries intact."""
+    write_spec(tmp_path / "planner-spec.json")
+    legacy = tmp_path / STATE_DIR / "eval-attestations.json"
+    write_file(
+        legacy,
+        json.dumps({"version": 1, "evals": {"9": {"sha256": "x", "hmac": "y"}}}),
+    )
+
+    result = run_orchestrator(tmp_path, "--json")
+    assert result.returncode == 0
+    assert not legacy.exists(), "legacy in-project store must be removed"
+    external = _external_attest_store(tmp_path)
+    assert external.exists()
+    assert json.loads(external.read_text(encoding="utf-8"))["evals"]["9"]["sha256"] == "x"
+
+
+# --- protected harness paths (anti privilege inversion) ------------------------
+
+
+def test_is_protected_path_covers_hooks_scripts_and_contract() -> None:
+    from scripts.orchestrate import is_protected_path
+
+    assert is_protected_path(".githooks/pre-commit")
+    assert is_protected_path("scripts/orchestrate.py")
+    assert is_protected_path("scripts/run-codex.sh")
+    assert is_protected_path("AGENTS.md")
+    assert not is_protected_path("app.py")
+    assert not is_protected_path("scripts/deploy.sh")
+    assert not is_protected_path("src/AGENTS.md")
+
+
+def test_commit_request_rejected_when_changed_files_touch_protected_path(
+    tmp_path: Path,
+) -> None:
+    """A commit request listing hooks/harness scripts must be rejected —
+    the Generator may not rewrite its own guardrails."""
+    write_spec(tmp_path / "planner-spec.json")
+    _init_git_project(tmp_path)
+    (tmp_path / "sprint-contract.md").write_text(
+        "## Sprint 1\nCONTRACT APPROVED\n", encoding="utf-8"
+    )
+    first = run_orchestrator(tmp_path, "--json")
+    assert json.loads(first.stdout)["action"] == "invoke_codex_for_implementation"
+
+    write_file(tmp_path / ".githooks" / "pre-commit", "#!/bin/sh\nexit 0\n")
+    write_file(tmp_path / "app.py", "print('x')\n")
+    write_json(
+        tmp_path / COMMIT_REQUESTS_DIR / "sprint-1.json",
+        {"sprint": 1, "attempt": "initial", "commit_message": "feat(sprint-1): x",
+         "changed_files": ["app.py", ".githooks/pre-commit"]},
+    )
+
+    second = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(second.stdout)
+    assert second.returncode == 2
+    assert payload["rule"] == "commit_request_rejected"
+    assert "protected" in payload["rationale"]
+    assert not (tmp_path / EVAL_TRIGGER).exists()
+
+
+def test_commit_request_rejected_when_add_all_stages_protected_path(
+    tmp_path: Path,
+) -> None:
+    """Omitting changed_files (git add -A) must not smuggle protected paths in."""
+    write_spec(tmp_path / "planner-spec.json")
+    _init_git_project(tmp_path)
+    (tmp_path / "sprint-contract.md").write_text(
+        "## Sprint 1\nCONTRACT APPROVED\n", encoding="utf-8"
+    )
+    first = run_orchestrator(tmp_path, "--json")
+    assert json.loads(first.stdout)["action"] == "invoke_codex_for_implementation"
+
+    write_file(tmp_path / "AGENTS.md", "relaxed generator rules\n")
+    write_file(tmp_path / "app.py", "print('x')\n")
+    write_json(
+        tmp_path / COMMIT_REQUESTS_DIR / "sprint-1.json",
+        {"sprint": 1, "attempt": "initial", "commit_message": "feat(sprint-1): x"},
+    )
+
+    second = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(second.stdout)
+    assert second.returncode == 2
+    assert payload["rule"] == "commit_request_rejected"
+    assert "protected" in payload["rationale"]
+    log = run_git(tmp_path, "log", "-1", "--format=%s")
+    assert "feat(sprint-1)" not in log.stdout, "nothing may be committed on rejection"

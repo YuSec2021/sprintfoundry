@@ -210,6 +210,19 @@ Write it to `.sprintfoundry/signals/commit-requests/sprint-<N>.json`, update
 `.sprintfoundry/claude-progress.txt` compactly, then stop. The Orchestrator
 will commit and write `.sprintfoundry/signals/eval-trigger.txt` after validation.
 
+**Protected paths — never modify or list in `changed_files`:** `.githooks/`,
+`scripts/orchestrate.py`, `scripts/run-codex.sh`, `scripts/harness-log.py`,
+`scripts/check-agent-sync.sh`, `scripts/install-hooks.sh`, and `AGENTS.md`.
+These are the harness's own guardrails; the Orchestrator rejects any commit
+request that touches them (whether listed explicitly or swept in by an empty
+`changed_files`) and pauses the run. Never write
+`.sprintfoundry/results/eval/eval-result-*.md` — verdicts belong to the
+Evaluator, and the Orchestrator attests each one in a store kept outside the
+project root; an unattested `SPRINT PASS` pauses the harness as suspected
+self-certification. You run under a workspace-write sandbox: writes outside
+the project and `/tmp` fail by design (package caches are redirected to
+`.sprintfoundry/cache/`), and `.git/` is read-only.
+
 ## Retry Phase
 
 When invoked after SPRINT FAIL:
