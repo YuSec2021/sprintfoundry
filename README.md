@@ -74,6 +74,7 @@ Important boundaries:
 - Progress advances through file artifacts, not chat memory.
 - Codex runs in a workspace-write sandbox by default; package caches stay under `.sprintfoundry/cache/`.
 - A sprint is complete only when its eval result has a dedicated `SPRINT PASS` verdict line and a valid Orchestrator attestation.
+- `SPRINTFOUNDRY.md` is the project constitution for architecture, testing, and examples; it outranks per-sprint decisions on those dimensions.
 
 ## Main Flow
 
@@ -91,7 +92,7 @@ flowchart TD
     A1 -- yes --> G["Codex implements exactly one sprint"]
     G --> RQ["Codex writes commit request"]
     RQ --> T["Orchestrator commits and writes .sprintfoundry/signals/eval-trigger.txt"]
-    T --> Q["Quality Gate: lint, types, tests, coverage, security"]
+    T --> Q["Quality Gate: lint, types, tests, coverage, security, feature gate"]
     Q -- fail --> QF["Codex fixes only quality-gate failures"]
     QF --> RQ
     Q -- pass --> E["Evaluator black-box CHECK"]
@@ -142,6 +143,17 @@ Supported modes:
 
 This makes SprintFoundry suitable for frontend apps, full-stack apps, API services, CLIs, workers, and libraries.
 
+## Project Constitution
+
+Each target project may define `SPRINTFOUNDRY.md` as its top-level constitution:
+
+- §1 records the pinned technology stack, architecture boundaries, allowed dependencies, verification surface, and test/example directories.
+- §2a requires one automated acceptance test for every sprint criterion.
+- §2b requires a separate, permanent feature regression suite, including the full CRUD matrix for data features.
+- §3 requires a runnable end-to-end example for every completed feature.
+
+The quality gate's `feature-gate` deterministically checks that feature-type sprints touching application source also touch the declared feature-test and example directories. The Evaluator remains responsible for judging architecture drift and whether those tests and examples genuinely cover the feature.
+
 ## File-State Protocol
 
 SprintFoundry is a file-driven state machine. The orchestrator always prefers current files over prior conversation context.
@@ -149,6 +161,7 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 | File | Owner | Purpose |
 | --- | --- | --- |
 | `.sprintfoundry/state/scope-classification.json` | Planner | Scale decision: `standard` or `large_system`, with evidence and epic outline |
+| `SPRINTFOUNDRY.md` | Planner + Human | Project constitution for architecture, dual test layers, runnable examples, and their declared directories |
 | `planner-spec.json` | Planner | Product spec, design language, tech stack, verification mode, and sprint list |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint acceptance contract; code cannot start until approved |
 | `.sprintfoundry/state/sprint-fence.json` | Orchestrator | Expected sprint number and base commit before implementation starts |
@@ -158,6 +171,7 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 | `.sprintfoundry/signals/target-sprint.txt` | User + Orchestrator | Optional `sprint=N` override to run one pending sprint out of order |
 | `.sprintfoundry/results/quality/quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK |
 | `.sprintfoundry/results/eval/eval-result-{N}.md` | Evaluator | Sprint verdict and evidence; only an anchored, Orchestrator-attested `SPRINT PASS` completes a sprint |
+| `~/.sprintfoundry/attest/<project-hash>.json` + `~/.sprintfoundry/attest.key` | Orchestrator | External HMAC records for eval verdicts, contract approvals, quality gates, and sprint fences |
 | `.sprintfoundry/state/run-state.json` | Orchestrator | Current mode, retry counters, active branch, pause state, version metadata, and optional `target_sprint` override |
 | `.sprintfoundry/claude-progress.txt` | Generator + Orchestrator | Compact rolling handoff, not a transcript |
 | `change-request.md` | User + Orchestrator | Classified iteration request: bugfix, minor feature, major feature, or replan |
@@ -184,10 +198,13 @@ Depending on the detected stack, it can run:
 - coverage thresholds
 - dependency security audits
 - a stack-independent `test-presence` check that rejects application source changes without an added or updated test file
+- a `feature-gate` check that requires feature regression tests and runnable examples for feature-type sprints
 
 Quality gate failures use their own `quality_retry_count`; they do not consume the Evaluator retry budget. The Evaluator reads `.sprintfoundry/results/quality/quality-gate-{N}.md` and uses it when scoring Craft. Legacy root-level `quality-gate-{N}.md` files may be read during migration, but new quality gate files belong under `.sprintfoundry/results/quality/`.
 
 Every contract success criterion must also include an `Automated test:` mapping with a concrete test file and command. During CHECK, the Evaluator runs each mapped command before functional verification and fails the sprint when a mapping is missing, its test file does not exist, or the command fails.
+
+The Orchestrator attests contract approvals, quality-gate reports, eval verdicts, and sprint fences outside the project root. Missing or modified attestations pause or re-route the harness, preventing a Generator from self-approving scope, planting a quality report, or self-certifying a sprint.
 
 ## Versioning
 
@@ -250,6 +267,7 @@ The CI workflow `.github/workflows/validate-plugins.yml` validates:
 │   └── planner-spec.json
 ├── tests/
 │   └── test_orchestrate.py
+├── SPRINTFOUNDRY.md
 ├── AGENTS.md
 ├── CLAUDE.md
 ├── README.md
