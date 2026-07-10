@@ -145,6 +145,22 @@ enforced a static `test-presence` check (source changed ⇒ test files changed);
 this per-criterion run is the stronger guarantee that each contracted item has a
 test that exercises it and passes. Record each command + result in Evidence.
 
+### SPRINTFOUNDRY.md constraint checks (mandatory)
+
+Read `SPRINTFOUNDRY.md` and enforce it — any violation is **SPRINT FAIL**. (The
+quality gate's `feature-gate` already did a path-level pre-check that a feature
+sprint touched `feature_tests_dir`/`examples_dir`; you confirm they actually
+exercise the feature and pass.)
+
+- **§1 architecture drift**: diff contradicts §1 (unlisted dependency, forbidden
+  pattern, boundary violation). Use `ARCHITECTURE DRIFT DETECTED` when a §1 change
+  is required; else FAIL with the specific violation.
+- **§2b feature regression suite**: the touched feature must have a **separate**
+  regression suite under `feature_tests_dir` (distinct from the sprint acceptance
+  tests, e.g. full CRUD) that passes. Missing / not separate / failing → FAIL.
+- **§3 example/case**: the feature must ship a runnable example under
+  `examples_dir` exercising it end-to-end. Run it; missing or non-runnable → FAIL.
+
 ### Evaluation process
 
 Read `planner-spec.json` and identify `verification.mode`. Execute each

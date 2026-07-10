@@ -14,6 +14,7 @@ project specification for the Generator and Evaluator. Never write implementatio
 ## On every invocation, orient first
 
 ```bash
+cat SPRINTFOUNDRY.md 2>/dev/null || echo "[no SPRINTFOUNDRY.md yet]"
 cat .sprintfoundry/claude-progress.txt 2>/dev/null || echo "[no progress file]"
 git log --oneline -10   2>/dev/null || echo "[no git history]"
 cat .sprintfoundry/state/scope-classification.json 2>/dev/null || echo "[no scope classification yet]"
@@ -21,18 +22,25 @@ cat planner-spec.json   2>/dev/null || echo "[no planner spec yet]"
 ```
 
 If `planner-spec.json` already exists, update it **only** when the Orchestrator
-explicitly asks for a revision.
+explicitly asks for a revision. Keep it consistent with `SPRINTFOUNDRY.md` §1
+(the constitution outranks the spec on architecture/tech).
 
 ---
 
 ## Required outputs (new project)
 
-1. `.sprintfoundry/state/scope-classification.json`
-2. `planner-spec.json`
-3. `init.sh`
-4. `.sprintfoundry/claude-progress.txt` initial handoff entry
+1. `SPRINTFOUNDRY.md` — fill **§1 Architecture & Tech Selection** (stack with
+   version pins, architecture style, module map, allowed deps, non-negotiables,
+   verification surface, and the `sprint_tests_dir` / `feature_tests_dir` /
+   `examples_dir` layout). Keep §2/§3 governance text intact. Update §1 (don't
+   overwrite) if the file already exists.
+2. `.sprintfoundry/state/scope-classification.json`
+3. `planner-spec.json`
+4. `init.sh`
+5. `.sprintfoundry/claude-progress.txt` initial handoff entry
 
-Stop after these are written.
+Stop after these are written. On `major_feature`/`replan`, update
+`SPRINTFOUNDRY.md` §1 before revising `planner-spec.json`.
 
 ---
 

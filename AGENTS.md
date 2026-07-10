@@ -31,6 +31,7 @@ State lives on disk, not in chat memory.
 
 | File | Owner | Meaning |
 | --- | --- | --- |
+| `SPRINTFOUNDRY.md` | Planner + Human | **Top-level project constitution**: §1 architecture/tech, §2 dual-test rule (sprint + separate feature/CRUD regression tests), §3 example rule. Read first, every sprint; outranks per-sprint decisions on those dimensions. |
 | `.sprintfoundry/state/scope-classification.json` | Planner | Planning scale: `standard` or `large_system`, with evidence and epic outline. |
 | `planner-spec.json` | Planner | Product spec, sprint list, tech stack, verification mode. |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done. Must be approved before code. |
@@ -103,6 +104,7 @@ next; the override self-clears once that sprint passes.
 Every Codex session starts with:
 
 ```bash
+cat SPRINTFOUNDRY.md 2>/dev/null || echo "[no SPRINTFOUNDRY.md]"
 cat .sprintfoundry/claude-progress.txt 2>/dev/null || echo "[no progress]"
 git log --oneline -10
 bash init.sh
@@ -113,11 +115,16 @@ fails, diagnose and fix that first.
 
 Before writing code, reread only:
 
+- `SPRINTFOUNDRY.md` — the project constitution. Stay within §1 architecture/tech;
+  satisfy §2 (both the sprint acceptance tests **and** the feature's separate
+  regression/CRUD suite) and §3 (a runnable example for the feature).
 - `planner-spec.json`
 - `sprint-contract.md`
 - `.sprintfoundry/prompts/sprint-*/attempt-*-invoke-codex-for-retry.md` when retrying
 
-Do not treat old chat context as truth.
+Do not treat old chat context as truth. If a task would require drifting from
+§1 of `SPRINTFOUNDRY.md`, stop and surface it — do not silently change the
+architecture.
 
 ## Branch Rules
 
@@ -178,11 +185,19 @@ commit.
 Implementation rules:
 
 - Implement only Sprint N.
-- Follow the planner's tech stack and verification mode.
-- **Ship an automated test for every criterion / update item.** Any commit that
-  changes application source code must add or extend at least one test file, or
-  the quality gate's `test-presence` check fails the sprint. Each contract
+- Follow the planner's tech stack and verification mode, and stay within
+  `SPRINTFOUNDRY.md` §1 architecture. Never drift the architecture on your own —
+  if the task seems to require it, stop and surface it.
+- **§2a — Ship an automated test for every criterion / update item.** Any commit
+  that changes application source code must add or extend at least one test file,
+  or the quality gate's `test-presence` check fails the sprint. Each contract
   criterion's `Automated test:` must exist and pass.
+- **§2b — Ship/extend the feature's separate regression suite** (e.g. full CRUD)
+  under `SPRINTFOUNDRY.md`'s `feature_tests_dir`, in a **different** location
+  from the sprint acceptance tests. A feature touched without its regression
+  suite present and passing fails the sprint.
+- **§3 — Ship a runnable example** for the feature under `examples_dir` that
+  exercises it end-to-end against `init.sh`.
 - Never remove or weaken existing tests.
 - Never use inline styles in frontend components.
 - Prefer deleting weak code over wrapping it in new layers.

@@ -48,10 +48,13 @@ sha256 and it is re-verified at commit time). Codex may keep a courtesy
 self-check; on any mid-session contract change, stop and surface to the
 Orchestrator.
 
-- Read `planner-spec.json` for VDL and architecture constraints
-- Write tests alongside implementation — never after. **Every criterion / update
-  item ships its own automated test.** A source-code change with no accompanying
-  test file fails the quality gate's `test-presence` check.
+- Read `SPRINTFOUNDRY.md` §1 and `planner-spec.json` for VDL and architecture
+  constraints; stay within §1 and never drift the architecture on your own
+- Write tests alongside implementation — never after. Per `SPRINTFOUNDRY.md`:
+  **§2a** one automated test per criterion (a source change with no test file
+  fails the `test-presence` gate); **§2b** add/extend the feature's **separate**
+  regression suite (e.g. CRUD) under `feature_tests_dir`; **§3** add a runnable
+  example under `examples_dir`
 - No inline styles in React/frontend components
 - Do not carry forward abstractions unless required by current sprint
 - Check that implementation branch matches `.sprintfoundry/state/run-state.json active_branch`

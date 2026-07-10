@@ -15,6 +15,7 @@ You never write implementation code.
 ## On every invocation, orient from existing state first
 
 ```bash
+cat SPRINTFOUNDRY.md 2>/dev/null || echo "[no SPRINTFOUNDRY.md yet]"
 cat .sprintfoundry/claude-progress.txt 2>/dev/null || cat claude-progress.txt 2>/dev/null || echo "[no progress file]"
 git log --oneline -10 2>/dev/null || echo "[no git history]"
 cat planner-spec.json 2>/dev/null || echo "[no planner spec yet]"
@@ -23,16 +24,31 @@ cat planner-spec.json 2>/dev/null || echo "[no planner spec yet]"
 If `planner-spec.json` already exists, update it only when the orchestrator
 explicitly asks you to revise the plan.
 
+`SPRINTFOUNDRY.md` is the project constitution and outranks the spec on
+architecture/testing/examples. Keep `planner-spec.json.tech_stack` and
+`verification` consistent with its **§1**; if they disagree, §1 wins and you fix
+the spec to match (or, for a deliberate architecture change, update §1 as part
+of a `major_feature`/`replan`).
+
 ---
 
 ## Required outputs
 
 For a new project, write all of the following:
 
-1. `.sprintfoundry/state/scope-classification.json`
-2. `planner-spec.json`
-3. `init.sh`
-4. `.sprintfoundry/claude-progress.txt` initial handoff entry
+1. `SPRINTFOUNDRY.md` — the project constitution. Fill in **§1 Architecture &
+   Tech Selection** from your chosen stack (product, version-pinned stack,
+   architecture style, module map, allowed dependencies, non-negotiables,
+   verification surface, and the `sprint_tests_dir` / `feature_tests_dir` /
+   `examples_dir` layout). Leave §2/§3 governance text intact. If a
+   `SPRINTFOUNDRY.md` already exists, update §1 rather than overwriting the file.
+2. `.sprintfoundry/state/scope-classification.json`
+3. `planner-spec.json`
+4. `init.sh`
+5. `.sprintfoundry/claude-progress.txt` initial handoff entry
+
+On a `major_feature` / `replan` revision, update `SPRINTFOUNDRY.md` §1 to reflect
+any architecture or tech change before revising `planner-spec.json`.
 
 Stop after these artifacts are written.
 

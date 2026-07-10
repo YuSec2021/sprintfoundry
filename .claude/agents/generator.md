@@ -146,11 +146,15 @@ contract by re-reading the new version.
 
 Implementation rules:
 
-- Read `planner-spec.json` for architecture constraints before writing code
+- Read `SPRINTFOUNDRY.md` §1 and `planner-spec.json` for architecture constraints
+  before writing code; stay within §1 and never drift the architecture yourself.
 - Follow the Visual Design Language from the spec for all UI work
-- Write tests alongside implementation — **one automated test per criterion /
-  update item**. A source-code change with no accompanying test file fails the
-  quality gate's `test-presence` check, so the sprint cannot pass.
+- Write tests alongside implementation. Per `SPRINTFOUNDRY.md`:
+  - **§2a**: one automated test per criterion / update item (a source-code
+    change with no accompanying test file fails the `test-presence` gate).
+  - **§2b**: add/extend the feature's **separate** regression suite (e.g. full
+    CRUD) under `feature_tests_dir` — a different location from the sprint tests.
+  - **§3**: add a runnable example for the feature under `examples_dir`.
 - Never use inline styles in React components
 - Prefer small coherent edits over layering more code on top of weak code
 - Delete temporary scaffolding, dead branches, and debug helpers before requesting commit

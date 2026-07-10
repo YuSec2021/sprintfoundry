@@ -34,6 +34,7 @@ sprintfoundry/
 │   └── package_plugin.sh         # Build sprintfoundry.plugin (ships scripts)
 ├── tests/                         # pytest suite for orchestrate.py behavior
 ├── docs/protocol.md              # Full protocol reference
+├── SPRINTFOUNDRY.md              # Project constitution: architecture + test/example constraints (read first, every sprint)
 ├── AGENTS.md                     # Codex (Generator) contract
 └── sprintfoundry.plugin          # Built artifact — DO NOT EDIT DIRECTLY
 ```
@@ -104,6 +105,7 @@ memory:
 
 ```bash
 python3 scripts/orchestrate.py --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --check-only --json
+cat SPRINTFOUNDRY.md 2>/dev/null || echo "[no SPRINTFOUNDRY.md]"
 cat .sprintfoundry/state/run-state.json 2>/dev/null || echo "[no run-state]"
 cat .sprintfoundry/claude-progress.txt  2>/dev/null || echo "[no progress]"
 cat sprint-contract.md 2>/dev/null | head -40 || echo "[no contract]"
@@ -124,11 +126,15 @@ agent until a human explicitly clears it.
 4. `contract-tampered.flag` → pause (advisory; the hard check is the fence sha).
 5. Commit request exists → Orchestrator validates (fence sha, branch, paths),
    commits, writes `.sprintfoundry/signals/eval-trigger.txt`.
-6. Eval trigger exists → Quality Gate (missing → run it; FAIL → quality retry;
-   PASS → Evaluator CHECK) or targeted Codex retry on a FAIL verdict
-   (digest inlined, full verdict archived to `.sprintfoundry/archive/`).
-7. `sprint-contract.md` unapproved → Evaluator contract review.
-8. Approved contract → prepare branch + fence (records contract sha), invoke Codex.
+6. Eval trigger exists → fence integrity check first (deleted/rewritten fence
+   → pause), then Quality Gate (missing → run it; unattested → archive +
+   re-run; FAIL → quality retry; PASS → Evaluator CHECK) or targeted Codex
+   retry on a FAIL verdict (digest inlined, full verdict archived to
+   `.sprintfoundry/archive/`).
+7. `sprint-contract.md` unapproved (or approval unattested) → Evaluator
+   contract review; contract modified after approval attestation → pause.
+8. Attested approved contract → prepare branch + fence (records contract sha
+   + external fence record), invoke Codex.
 9. `bug-report.md` → Codex proposes bugfix contract.
 10. `change-request.md` → route by `Type`.
 11. All planned sprints PASS → complete.
@@ -174,6 +180,12 @@ paths. The wrapper refuses prompt files above 16 KB (exit 91).
 - No code before `CONTRACT APPROVED`.
 - No sprint advancement without `SPRINT PASS`.
 - A verdict file without an explicit `SPRINT PASS` never counts as passed (fail-closed).
+- Attestation (`~/.sprintfoundry/attest/`) covers ALL in-project trust points:
+  eval verdicts (`--attest-eval N`), contract approvals (`--attest-contract`),
+  quality-gate reports (`--attest-quality N`), and the sprint fence (recorded
+  automatically). Unattested PASS pauses; unattested approval re-routes to
+  Evaluator review; unattested quality report is archived + gate re-runs;
+  deleted/rewritten fence rejects the commit and pauses.
 - Verdict parsing is line-anchored: `SPRINT PASS` / `Verdict: PASS` /
   `CONTRACT APPROVED` only count as a dedicated line; quoted tokens and the
   unfilled template parse as UNKNOWN.

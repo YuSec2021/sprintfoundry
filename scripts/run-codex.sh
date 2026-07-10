@@ -90,17 +90,25 @@ else
     fi
 fi
 
+# Job control on: the background job below gets its OWN process group, so the
+# watchdog can kill Codex together with every child it spawned (builds, test
+# runners, dev servers). Killing only $PID leaves orphans holding ports/locks
+# that poison the next attempt.
+set -m
 codex exec "${CODEX_ARGS[@]}" \
   -c 'shell_environment_policy.inherit=all' \
   --skip-git-repo-check \
   "$WRAPPER_PROMPT" >>"$LOG" 2>&1 &
 PID=$!
+set +m
 START=$(date +%s)
 
 kill_codex() {
-    kill -TERM "$PID" 2>/dev/null
+    # Whole process group first (portable macOS/Linux); fall back to the
+    # single PID if the group is already gone.
+    kill -TERM -- "-$PID" 2>/dev/null || kill -TERM "$PID" 2>/dev/null
     sleep 5
-    kill -KILL "$PID" 2>/dev/null
+    kill -KILL -- "-$PID" 2>/dev/null || kill -KILL "$PID" 2>/dev/null
 }
 
 while kill -0 "$PID" 2>/dev/null; do

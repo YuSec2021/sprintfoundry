@@ -72,11 +72,12 @@ State lives in files, never in conversation memory.
 | `bug-report.md` | User + Orchestrator | Dedicated regression/defect intake used to create tightly scoped bugfix sprints |
 | `.sprintfoundry/claude-progress.txt` | Generator | Cross-session handoff log |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done — **deleted by Orchestrator after SPRINT PASS** |
-| `.sprintfoundry/results/eval/eval-result-{N}.md` | Evaluator | Per-sprint scores and critique |
+| `.sprintfoundry/results/eval/eval-result-{N}.md` | Evaluator | Per-sprint scores and critique. A PASS only counts when Orchestrator-attested (`orchestrate.py --attest-eval N`) |
 | `.sprintfoundry/signals/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation |
 | `.sprintfoundry/signals/eval-trigger.txt` | Orchestrator | Signal file: `sprint=N` or `sprint=N-retry` written after Orchestrator commit — **must match the fenced sprint** |
-| `.sprintfoundry/results/quality/quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK |
-| `.sprintfoundry/state/sprint-fence.json` | Orchestrator | Written before Codex starts implementing; records expected sprint + base git commit. Any eval trigger that names a different sprint triggers an immediate boundary-violation pause. |
+| `.sprintfoundry/results/quality/quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK. Only counts when Orchestrator-attested (`--attest-quality N`); an unattested report is archived as evidence and the gate re-runs |
+| `.sprintfoundry/state/sprint-fence.json` | Orchestrator | Written before Codex starts implementing; records expected sprint + base git commit + approved-contract sha. Mirrored into the external attestation store when written — a deleted or rewritten fence rejects the commit request and pauses (fail-closed) instead of silently skipping the checks. Any eval trigger that names a different sprint triggers an immediate boundary-violation pause. |
+| `~/.sprintfoundry/attest/<project-hash>.json` + `~/.sprintfoundry/attest.key` | Orchestrator | **External attestation store and HMAC key (outside the project root)** — records for eval verdicts, contract approvals, quality-gate reports, and the sprint fence. Unwritable from inside the default Codex workspace-write sandbox, so the Generator cannot self-certify any trust point. Pre-existing artifacts are grandfathered on the first read-write run (trust on first use). |
 | `.sprintfoundry/state/run-state.json` | Orchestrator | Unattended mode state, retry counters, pause/escalation flags — **cache, not truth** |
 | `.sprintfoundry/logs/harness-audit.ndjson` | Orchestrator + git hooks + humans | **Append-only forensic timeline**: every orchestrator run, audit finding, state transition, commit, hook block/bypass, and human note. Never rewritten. See "Append-only audit trail" below. |
 | `init.sh` | Planner | Reproducible dev server startup |
@@ -405,11 +406,22 @@ these constraints during contract review and will reject a contract that violate
 
 Then stop. The Orchestrator routes this to Evaluator for contract review.
 
-**Step 3 — Implement** (only after `sprint-contract.md` contains "CONTRACT APPROVED")
+**Step 3 — Implement** (only after `sprint-contract.md` contains "CONTRACT
+APPROVED" **and** the Orchestrator has attested the approval with
+`orchestrate.py --attest-contract`)
+
+An approval marker alone is Generator-writable content and is never trusted:
+without a matching attestation the router sends the contract back to a real
+Evaluator review (`contract_approval_unattested`); a contract modified after
+its approval was attested pauses the harness
+(`contract_attestation_tampered`).
 
 Contract-tamper enforcement is Orchestrator-owned: the sha256 of the approved
 contract is recorded in `.sprintfoundry/state/sprint-fence.json` before
 implementation starts and re-verified when the commit request is executed.
+The fence itself is mirrored into the external attestation store when
+written, so deleting or rewriting the fence file rejects the commit and
+pauses instead of skipping the check.
 Codex may keep a courtesy self-check; if the contract changes mid-session,
 stop immediately and surface it — do not request a commit against a modified
 contract.
@@ -504,8 +516,8 @@ When invoked after a SPRINT FAIL:
 - Never start a new sprint on the previous sprint's branch.
 - Never merge an unapproved sprint branch into `main`.
 - Never write to `.sprintfoundry/state/run-state.json` — that file is owned by the Orchestrator.
-- **Stop immediately after writing `.sprintfoundry/signals/eval-trigger.txt`.** Do not read `planner-spec.json` to find the next sprint. Do not create a new branch. Do not implement any subsequent sprint. The Orchestrator is the only entity permitted to advance the sprint counter.
-- **Write `.sprintfoundry/signals/eval-trigger.txt` with the exact content `sprint=N`** where N is the sprint you just implemented. Never write a different sprint number.
+- **Never write `.sprintfoundry/signals/eval-trigger.txt`** — the Orchestrator writes it after validating and executing your commit request. Stop immediately after writing the commit request and updating `.sprintfoundry/claude-progress.txt`. Do not read `planner-spec.json` to find the next sprint. Do not create a new branch. Do not implement any subsequent sprint. The Orchestrator is the only entity permitted to advance the sprint counter.
+- **Write the commit request with the exact sprint number you implemented** (`"sprint": N`). Never claim a different sprint number.
 - **Respect `.sprintfoundry/state/sprint-fence.json`.** If this file exists, its `sprint` field is the only sprint you are authorised to implement in this session. Stop without writing code if you are being asked to implement a different sprint.
 
 ---
@@ -526,6 +538,11 @@ CONTRACT APPROVED
 Sprint: <N>
 Approved criteria: <count>
 ```
+
+The Orchestrator then attests the approval immediately
+(`orchestrate.py --attest-contract`). Routing never trusts the marker alone:
+an unattested approval goes back to review, so a Generator embedding
+`CONTRACT APPROVED` in its own proposal can never reach implementation.
 
 **If changes needed**, return required changes and do not proceed to Mode 2.
 
@@ -639,14 +656,20 @@ Every sprint must pass through all four phases in order.  No phase may be skippe
 │       │         Orchestrator routes to Evaluator        │
 │       ▼                                                 │
 │  2. APPROVAL    Evaluator writes CONTRACT APPROVED      │
-│       │         Orchestrator writes .sprintfoundry/state/sprint-fence.json   │
+│       │         Orchestrator attests (--attest-contract)│
+│       │         then writes .sprintfoundry/state/sprint-fence.json           │
+│       │         (fence mirrored to external attest store)                    │
 │       ▼                                                 │
 │  3. IMPLEMENT   Codex implements Sprint N ONLY          │
 │       │         Writes commit request  → STOPS          │
-│       │         Orchestrator commits + writes trigger   │
+│       │         Orchestrator validates fence integrity  │
+│       │         + contract sha, commits, writes trigger │
+│       │         Quality gate runs → attested            │
+│       │         (--attest-quality N)                    │
 │       ▼                                                 │
 │  4. EVALUATE    Evaluator runs black-box CHECK          │
 │       │         Writes .sprintfoundry/results/eval/eval-result-N.md                 │
+│       │         Orchestrator attests (--attest-eval N)  │
 │       ▼                                                 │
 │  SPRINT PASS?  ──Yes──▶  Orchestrator deletes           │
 │                          sprint-contract.md             │
@@ -681,6 +704,20 @@ each result immediately after Evaluator CHECK; an unattested or subsequently
 modified PASS pauses the harness. Codex runs in a workspace-write sandbox by
 default, and commit requests touching harness hooks, core scripts, or
 `AGENTS.md` are rejected.
+
+The same trust model covers every other in-project trust point, because the
+Generator can write any file inside the project:
+
+- **Contract approval** — `CONTRACT APPROVED` only counts when attested
+  (`--attest-contract`); unattested → back to Evaluator review; modified after
+  attestation → pause.
+- **Quality-gate report** — only counts when attested (`--attest-quality N`);
+  unattested → archived to `.sprintfoundry/archive/sprint-{N}/` and the gate
+  re-runs.
+- **Sprint fence** — recorded in the external store when written; a deleted or
+  rewritten fence rejects the commit request and pauses
+  (`sprint_fence_invalid`) instead of silently skipping the contract-sha and
+  boundary checks.
 
 Everything else is derived state:
 
@@ -760,6 +797,10 @@ python3 scripts/harness-log.py note --text "reason" # annotate a manual action
 | **Manual FAIL/complete override** | `chore: sprint N complete` commit rewrites `.sprintfoundry/state/run-state.json` to claim a `last_successful_sprint` that no eval-result supports. | (a) pre-commit hook rejects the advance-chore subject when the audit reports `sprint_history_inconsistent`; (b) if bypassed, the orchestrator pauses (`run_state_unsupported`) on the very next routing call. |
 | **Lower sprint left unpassed** | Sprint K passes while some Sprint M \< K has no `SPRINT PASS`. | Not a violation — Sprint M is simply **pending**; routing resumes at it (lowest-first) and it keeps its ID. Nothing is buried or renumbered. |
 | **Silent manual override** | Human edits `.sprintfoundry/state/run-state.json` directly, no audit trail, root-cause takes hours to find. | `post-commit` hook writes a `commit_recorded` entry flagging `.sprintfoundry/state/run-state.json` as sensitive; `orchestrator_run` writes `state_transition` diffs on every invocation. |
+| **Generator self-approves its contract** | Codex embeds a dedicated `CONTRACT APPROVED` line in the contract it proposes, skipping Evaluator review. | Approval only counts when Orchestrator-attested (`--attest-contract`); an unattested marker routes to a real Evaluator review (`contract_approval_unattested`). |
+| **Contract enlarged after approval** | Contract edited after the Evaluator approved it. | Attestation sha mismatch pauses (`contract_attestation_tampered`); the fence contract-sha check additionally rejects the commit. |
+| **Planted quality-gate report** | Codex pre-writes `quality-gate-{N}.md` with `Verdict: PASS` during implementation so the gate never really runs. | Report only counts when Orchestrator-attested (`--attest-quality N`); an unattested report is archived as evidence and the gate re-runs (`quality_gate_unattested`). |
+| **Fence deleted or rewritten** | Codex removes/rewrites `sprint-fence.json` so the contract-sha and sprint-boundary checks are silently skipped. | The fence is mirrored into the external attestation store when written; `fence_integrity()` returning `deleted`/`tampered` rejects the commit request and pauses (`sprint_fence_invalid`). |
 
 ---
 
@@ -772,9 +813,12 @@ planner-spec.json ready
 [SPRINT N]
     ├─ Codex proposes sprint-contract.md
     ├─ Claude Evaluator: CONTRACT APPROVED  (no code yet)
+    ├─ Orchestrator attests approval (--attest-contract) + writes fence
     ├─ Codex implements + writes commit request
-    ├─ Orchestrator commits + writes .sprintfoundry/signals/eval-trigger.txt
-    ├─ Claude Evaluator: eval-result-{N}.md
+    ├─ Orchestrator validates (fence integrity + contract sha), commits,
+    │  writes .sprintfoundry/signals/eval-trigger.txt
+    ├─ Quality gate runs → Orchestrator attests (--attest-quality N)
+    ├─ Claude Evaluator: eval-result-{N}.md → Orchestrator attests (--attest-eval N)
     │       SPRINT PASS → Orchestrator cleans up, next sprint
     │       SPRINT FAIL → Codex revises → re-CHECK
     └─▶ Sprint N+1
@@ -813,6 +857,9 @@ codex exec --sandbox workspace-write --ask-for-approval never \
 
 - Never skip contract negotiation — code does not begin before CONTRACT APPROVED.
 - Never self-evaluate — Codex never writes eval-result. Evaluator never writes code.
+- Never trust in-project trust points on file content alone — eval verdicts,
+  contract approvals, quality-gate reports, and the sprint fence all require a
+  valid Orchestrator attestation in the external store (`~/.sprintfoundry/attest/`).
 - Never mark a sprint complete without independent black-box verification.
 - Never remove or modify existing tests.
 - State lives in files — read artifacts at session start, not conversation history.

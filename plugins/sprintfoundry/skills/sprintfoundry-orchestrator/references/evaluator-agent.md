@@ -104,6 +104,26 @@ For **every** success criterion, run the command from its `Automated test:` line
 
 Record each criterion's test command + result in the Evidence section.
 
+### SPRINTFOUNDRY.md constraint checks (mandatory)
+
+Read `SPRINTFOUNDRY.md` and enforce its constraints — any violation is a
+**SPRINT FAIL** with a specific reason. (The quality gate's `feature-gate`
+already did a path-level pre-check that a feature sprint touched
+`feature_tests_dir` and `examples_dir`; you confirm those tests/example actually
+exercise the feature and pass.)
+
+- **§1 architecture drift**: the diff introduces a stack/dependency/architecture
+  choice that contradicts §1 (unlisted dependency, forbidden pattern, boundary
+  violation). Treat as `ARCHITECTURE DRIFT DETECTED` when the fix needs a §1
+  change; otherwise FAIL with the specific violation.
+- **§2b feature regression suite**: the touched feature must have a **separate**
+  regression suite under `feature_tests_dir` (distinct from the sprint acceptance
+  tests) covering routine behaviour (e.g. full CRUD) — and it must pass. If it is
+  missing, not separate, or failing → FAIL.
+- **§3 example/case**: the feature must ship a runnable example under
+  `examples_dir` that exercises it end-to-end. Run it. Missing or non-runnable →
+  FAIL.
+
 ### Functional evaluation by verification mode
 
 - `browser`: Playwright MCP — navigate, click, screenshot, assert visible state
